@@ -1,0 +1,45 @@
+producer BaseMachine {
+    dep PowerDraw: Power;
+    dep Speed: f64;
+
+    recipe_template <*>(<*>) -> <*> * Self::Speed @ Self::PowerDraw;
+}
+
+producer OreGen: BaseMachine {
+    recipe IronOre() -> (iron_ore / 1000ms);
+    recipe CopperOre() -> (copper_ore / 1000ms);
+}
+
+machine OreDrillMk1: OreGen {
+    dep PowerDraw: 50kW;
+    dep Speed: 1.0;
+}
+
+producer Smelter: BaseMachine {
+    recipe IronPlate(iron_ore) -> (iron_plate / 4000ms);
+    recipe CopperPlate(copper_ore) -> (copper_plate / 4000ms)
+}
+
+machine Furnace: Smelter {
+    dep PowerDraw: 100kW;
+    dep Speed: 1.0;
+}
+
+producer Assembler: BaseMachine {
+    recipe CopperWires(copper_ingot) -> (2x copper_wire / 1000ms);
+    recipe GreenChips(iron_plate, 3x copper_wire) -> (green_chip / 1000ms);
+}
+
+machine AssemblerMk1: Assembler {
+    dep PowerDraw = 30kW;
+    dep Speed = 1.0;
+}
+
+Items {
+    iron_ore,
+    iron_plate,
+    copper_ore,
+    copper_ingot,
+    copper_wire,
+    green_chip,
+}

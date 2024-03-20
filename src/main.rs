@@ -1,15 +1,18 @@
-use basemod::ItemKind;
+use chumsky::Parser;
 
 use crate::rate::Rate;
 
 mod basemod;
+mod factory;
+mod lexer;
+mod parser;
 mod rate;
 
 fn main() {
-    let iron_plate_item = Item { kind: basemod::ItemKind::IronPlate, module: basemod::MODULE };
-    let copper_plate_item = Item { kind: basemod::ItemKind::CopperPlate, module: basemod::MODULE };
-    let copper_wire_item = Item { kind: basemod::ItemKind::CopperWire, module: basemod::MODULE};
-    let green_chip_item = Item { kind: basemod::ItemKind::GreenChip, module: basemod::MODULE };
+    let iron_plate_item = Item { kind: basemod::ItemKind::IronPlate as u64, module: basemod::MODULE };
+    let copper_plate_item = Item { kind: basemod::ItemKind::CopperPlate as u64, module: basemod::MODULE };
+    let copper_wire_item = Item { kind: basemod::ItemKind::CopperWire as u64, module: basemod::MODULE};
+    let green_chip_item = Item { kind: basemod::ItemKind::GreenChip as u64, module: basemod::MODULE };
 
     let iron_plates_recipe = Recipe {
         rate: Rate::UNIT,
@@ -91,6 +94,14 @@ fn main() {
 
     let rate = green_chips.rate_of(green_chip_item).unwrap();
     println!("Green chips will be produced at {}% efficiency ({}/{:.2}s)", green_chips.efficiency() * 100.0, rate.amount, rate.time);
+
+    let source = include_str!("../assets/example/main.bp");
+    let lex = lexer::lexer().parse(source).unwrap();
+    let factory = parser::parser().parse(lex).unwrap();
+
+    for e in factory {
+        dbg!(e);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -152,17 +163,17 @@ pub type Efficiency = f64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Item {
-    pub kind: ItemKind,
+    pub kind: u64,
     pub module: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecipePart {
     pub item: Item,
     pub amount: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Recipe {
     pub rate: Rate,
     pub input: Vec<RecipePart>,
