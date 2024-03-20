@@ -22,7 +22,7 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
     let float = just('-')
         .or_not()
         .chain::<char, _, _>(text::int(10))
-        .chain::<char, _, _>(frac.or_not().flatten())
+        .chain::<char, _, _>(frac)
         .chain::<char, _, _>(exp.or_not().flatten())
         .boxed()
         .collect::<String>()
@@ -32,6 +32,7 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
     //  integers
     let int = just('-').or_not()
         .chain::<char, _, _>(text::digits(10))
+        .then_ignore(just("ms").or_not())
         .collect::<String>()
         .map(|t| t.parse::<i64>().unwrap_or(0))
         .map(|t| Token::Int(t));
@@ -56,7 +57,13 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
         .repeated()
         .at_least(1)
         .collect::<String>()
-        .map(Token::Op);
+        .map(|t| {
+            if t == "->" {
+                Token::Output
+            } else { 
+                Token::InfixOp(t)
+            }
+        });
 
     // control characters
     let ctrl = one_of("()[]{};:,").map(|c: char| Token::Ctrl(c));
@@ -73,18 +80,18 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
         | "item" => Token::Keyword(ident),
         "true" => Token::True,
         "false" => Token::False,
-        "in" => Token::Op("in".to_owned()),
         _ => Token::Ident(ident),
     });
 
     // let token = choice((float, int, string, op, ctrl, ident));
-    let token = float.or(int).or(string).or(op).or(ctrl).or(ident);
+    let token = choice((float, int, string, op, ctrl, ident));
     let comment = just("//").then(take_until(just('\n'))).padded().ignored();
 
     let glorp = token
         .padded_by(comment.repeated())
         .padded()
-        .repeated();
+        .repeated()
+        .then_ignore(end());
 
     glorp
 }

@@ -22,13 +22,11 @@ pub enum Token {
     // Machine,
     // Recipe,
     // Item,
-    Bound(char),
-    Op(String),
+    InfixOp(String),
 
     // ===== literal =====
     String(String),
     Int(i64),
-    Milliseconds(u64),
     Float(String),
     True,
     False,
@@ -45,8 +43,7 @@ impl From<&Token> for String {
         let out = match other {
             Token::Ctrl(c) => Some(format!("Ctrl({c})")),
             Token::Keyword(c) => Some(format!("Keyword({c})")),
-            Token::Bound(c) => Some(format!("Bound({c})")),
-            Token::Op(c) => Some(format!("Op({c})")),
+            Token::InfixOp(c) => Some(format!("InfixOp({c})")),
             _ => None,
         };
 
@@ -67,7 +64,6 @@ impl From<&Token> for String {
                 // Token::Item => "item",
                 Token::String(_) => "String",
                 Token::Int(_) => "Int",
-                Token::Milliseconds(_) => "Milliseconds",
                 Token::Float(_) => "Float",
                 Token::True => "True",
                 Token::False => "False",

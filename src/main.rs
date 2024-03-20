@@ -97,7 +97,13 @@ fn main() {
 
     let source = include_str!("../assets/example/main.bp");
     let lex = lexer::lexer().parse(source).unwrap();
-    let factory = parser::parser().parse(lex).unwrap();
+
+    for e in &lex {
+        dbg!(e);
+    }
+
+    let factory = parser::parser().parse(lex);
+    let factory = factory.unwrap();
 
     for e in factory {
         dbg!(e);
