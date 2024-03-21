@@ -35,7 +35,7 @@ machine AssemblerMk1: Assembler {
     dep Speed = 1.0;
 }
 
-Items {
+Products {
     iron_ore,
     iron_plate,
     copper_ore,

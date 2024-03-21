@@ -21,12 +21,12 @@ pub enum Token {
     // Producer,
     // Machine,
     // Recipe,
-    // Item,
+    // Product,
     InfixOp(String),
 
     // ===== literal =====
     String(String),
-    Int(i64),
+    Int(isize),
     Float(String),
     True,
     False,
@@ -61,7 +61,7 @@ impl From<&Token> for String {
                 // Token::Producer => "producer",
                 // Token::Machine => "machine",
                 // Token::Recipe => "recipe",
-                // Token::Item => "item",
+                // Token::Product => "product",
                 Token::String(_) => "String",
                 Token::Int(_) => "Int",
                 Token::Float(_) => "Float",

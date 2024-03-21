@@ -1,30 +1,30 @@
-use std::{iter::Sum, ops::{Add, AddAssign, Div, Mul, MulAssign}};
+use std::{iter::Sum, ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign}};
 
 use crate::Efficiency;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rate {
     /// Number of outputs per packet
-    pub amount: u64,
+    pub amount: usize,
     /// Number of output packets per time unit
-    pub time: f64,
+    pub freq: f64,
 }
 
 impl Rate {
-    pub const UNIT: Self = Self { amount: 1, time: 1.0 };
-    pub const ZERO: Self = Self { amount: 0, time: 1.0 };
+    pub const UNIT: Self = Self { amount: 1, freq: 1.0 };
+    pub const ZERO: Self = Self { amount: 0, freq: 1.0 };
     pub fn normalize(&self) -> f64 {
-        self.amount as f64 / self.time
+        self.amount as f64 / self.freq
     }
 }
 
-impl Mul<u64> for Rate {
+impl Mul<usize> for Rate {
     type Output = Rate;
 
-    fn mul(self, rhs: u64) -> Self::Output {
+    fn mul(self, rhs: usize) -> Self::Output {
         Rate {
             amount: self.amount * rhs,
-            time: self.time,
+            freq: self.freq,
         }
     }
 }
@@ -35,20 +35,37 @@ impl Mul<f64> for Rate {
     fn mul(self, rhs: f64) -> Self::Output {
         Rate {
             amount: self.amount,
-            time: self.time * 1.0 / rhs,
+            freq: self.freq / rhs,
         }
     }
 }
 
-impl MulAssign<u64> for Rate {
-    fn mul_assign(&mut self, rhs: u64) {
+impl MulAssign<usize> for Rate {
+    fn mul_assign(&mut self, rhs: usize) {
         self.amount *= rhs;
     }
 }
 
 impl MulAssign<f64> for Rate {
     fn mul_assign(&mut self, rhs: f64) {
-        self.time *= 1.0 / rhs;
+        self.freq /= rhs;
+    }
+}
+
+impl Div<f64> for Rate {
+    type Output = Rate;
+
+    fn div(self, rhs: f64) -> Self::Output {
+        Rate {
+            amount: self.amount,
+            freq: self.freq * rhs,
+        }
+    }
+}
+
+impl DivAssign<f64> for Rate {
+    fn div_assign(&mut self, rhs: f64) {
+        self.freq *= rhs;
     }
 }
 
@@ -56,10 +73,10 @@ impl Add<Rate> for Rate {
     type Output = Rate;
 
     fn add(self, rhs: Rate) -> Self::Output {
-        if self.time == rhs.time {
+        if self.freq == rhs.freq {
             Self {
                 amount: self.amount + rhs.amount,
-                time: self.time
+                freq: self.freq
             }
         } else {
             let out = (self.normalize()) + (rhs.normalize());
@@ -67,7 +84,7 @@ impl Add<Rate> for Rate {
 
             Self {
                 amount: 1,
-                time
+                freq: time
             }
         }
     }
@@ -77,7 +94,7 @@ impl AddAssign<Rate> for Rate {
     fn add_assign(&mut self, rhs: Rate) {
         let new = *self + rhs;
         self.amount = new.amount;
-        self.time = new.time;
+        self.freq = new.freq;
     }
 }
 

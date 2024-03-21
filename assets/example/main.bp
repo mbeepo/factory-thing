@@ -1,7 +1,7 @@
-item iron_plate;
-item copper_plate;
-item copper_wire;
-item green_chip;
+product iron_plate;
+product copper_plate;
+product copper_wire;
+product green_chip;
 
 recipe IronPlates() -> iron_plate / 1000ms;
 recipe CopperPlates() -> copper_plate / 1000ms;
@@ -10,6 +10,5 @@ recipe GreenChips(iron_plate, 3 * copper_wire) -> green_chip / 1000ms;
 
 let ironPlates = IronPlates() * 2;
 let copperPlates = CopperPlates() * 3;
-let copperWire = CopperWire(copperPlates) * 3;
+let copperWire = CopperWire(CopperPlates() * 3) * 3;
 let greenChips = GreenChips(ironPlates, copperWire) * 2;
-println(greenChips.efficiency()); // this should print `100.00%`

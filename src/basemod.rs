@@ -1,7 +1,7 @@
-pub const MODULE: u64 = 0;
+pub const MODULE: usize = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ItemKind {
+pub enum ProductKind {
     IronPlate = 0,
     CopperPlate,
     CopperWire,

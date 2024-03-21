@@ -1,137 +1,47 @@
+use std::{cell::RefCell, rc::Rc};
+
 use chumsky::Parser;
 
-use crate::rate::Rate;
+use crate::{factory::Factory, rate::Rate};
 
 mod basemod;
 mod factory;
-mod lexer;
-mod parser;
+mod lang;
 mod rate;
 
 fn main() {
-    let iron_plate_item = Item { kind: basemod::ItemKind::IronPlate as u64, module: basemod::MODULE };
-    let copper_plate_item = Item { kind: basemod::ItemKind::CopperPlate as u64, module: basemod::MODULE };
-    let copper_wire_item = Item { kind: basemod::ItemKind::CopperWire as u64, module: basemod::MODULE};
-    let green_chip_item = Item { kind: basemod::ItemKind::GreenChip as u64, module: basemod::MODULE };
-
-    let iron_plates_recipe = Recipe {
-        rate: Rate::UNIT,
-        input: vec![],
-        output: vec![
-            RecipePart {
-                item: iron_plate_item,
-                amount: 1,
-            }
-        ]
-    };
-    let iron_plates = Stream {
-        mult: 2,
-        recipe: Box::new(&iron_plates_recipe),
-        input: InputStreams::NONE
-    };
-
-    let copper_plates_recipe = Recipe {
-        rate: Rate::UNIT,
-        input: vec![],
-        output: vec![
-            RecipePart {
-                item: copper_plate_item,
-                amount: 1
-            }
-        ]
-    };
-    let copper_plates = Stream {
-        mult: 3,
-        recipe: Box::new(&copper_plates_recipe),
-        input: InputStreams::NONE
-    };
-
-    let copper_wires_recipe = Recipe {
-        rate: Rate::UNIT,
-        input: vec![
-            RecipePart {
-                item: copper_plate_item,
-                amount: 1
-            }
-        ],
-        output: vec![
-            RecipePart {
-                item: copper_wire_item,
-                amount: 2
-            }
-        ]
-    };
-    let copper_wires = Stream {
-        mult: 3,
-        recipe: Box::new(&copper_wires_recipe),
-        input: vec![copper_plates].into()
-    };
-
-    let green_chips_recipe = Recipe {
-        rate: Rate::UNIT,
-        input: vec![
-            RecipePart {
-                item: iron_plate_item,
-                amount: 1
-            },
-            RecipePart {
-                item: copper_wire_item,
-                amount: 3
-            }
-        ],
-        output: vec![
-            RecipePart {
-                item: green_chip_item,
-                amount: 1
-            }
-        ]
-    };
-    let green_chips = Stream {
-        mult: 2,
-        recipe: Box::new(&green_chips_recipe),
-        input: vec![iron_plates, copper_wires].into()
-    };
-
-    let rate = green_chips.rate_of(green_chip_item).unwrap();
-    println!("Green chips will be produced at {}% efficiency ({}/{:.2}s)", green_chips.efficiency() * 100.0, rate.amount, rate.time);
-
     let source = include_str!("../assets/example/main.bp");
-    let lex = lexer::lexer().parse(source).unwrap();
+    let lex = lang::lexer().parse(source).unwrap();
+    let ast = lang::parser().parse(lex).unwrap();
+    let mut factory = Factory::new();
+    factory.add_mod(ast).unwrap();
 
-    for e in &lex {
-        dbg!(e);
-    }
-
-    let factory = parser::parser().parse(lex);
-    let factory = factory.unwrap();
-
-    for e in factory {
-        dbg!(e);
-    }
+    let green_chips = factory.streams.get("__BASE::greenChips").unwrap();
+    println!("Green chips working at {:.1}% efficiency", green_chips.borrow().efficiency() * 100.0);
 }
 
-#[derive(Clone, Debug)]
-pub struct Stream<'a> {
-    pub mult: u64,
-    pub recipe: Box<&'a Recipe>,
-    pub input: InputStreams<'a>,
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stream {
+    pub mult: usize,
+    pub recipe: Rc<RefCell<Recipe>>,
+    pub inputs: InputStreams,
 }
 
-impl<'a> Stream<'a> {
+impl Stream {
     pub fn efficiency(&self) -> Efficiency {
-        if self.input.inner.len() == 0 {
+        if self.inputs.inner.len() == 0 {
             return 1.0 as Efficiency;
         }
 
-        self.recipe.input.iter().map(|i| {
-            let rate = self.input.rate_of(i.item);
-            let optimal_inflow = self.recipe.optimal_inflow_of(i.item);
+        self.recipe.borrow().inputs.iter().map(|i| {
+            let rate = self.inputs.rate_of(*i.product.borrow());
+            let optimal_inflow = self.recipe.borrow().optimal_inflow_of(*i.product.borrow());
             rate / (optimal_inflow * self.mult)
         }).reduce(Efficiency::min).unwrap_or(0.0).min(1.0)
     }
 
-    pub fn rate_of(&self, item: Item) -> Option<Rate> {
-        let outflow = self.recipe.optimal_outflow_of(item);
+    pub fn rate_of(&self, product: Product) -> Option<Rate> {
+        let outflow = self.recipe.borrow().optimal_outflow_of(product);
 
         if outflow != Rate::ZERO {
             let eff = self.efficiency();
@@ -142,25 +52,25 @@ impl<'a> Stream<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct InputStreams<'a> {
-    inner: Vec<Stream<'a>>
+#[derive(Clone, Debug, PartialEq)]
+pub struct InputStreams {
+    inner: Vec<Rc<RefCell<Stream>>>
 }
 
-impl<'a> InputStreams<'a> {
+impl InputStreams {
     pub const NONE: Self = Self { inner: vec![] };
 }
 
-impl<'a> From<Vec<Stream<'a>>> for InputStreams<'a> {
-    fn from(value: Vec<Stream<'a>>) -> Self {
+impl From<Vec<Rc<RefCell<Stream>>>> for InputStreams {
+    fn from(value: Vec<Rc<RefCell<Stream>>>) -> Self {
         Self { inner: value }
     }
 }
 
-impl<'a> InputStreams<'a> {
-    pub fn rate_of(&self, item: Item) -> Rate {
+impl InputStreams {
+    pub fn rate_of(&self, product: Product) -> Rate {
         self.inner.iter().filter_map(|s| {
-            s.rate_of(item)
+            s.borrow().rate_of(product)
         }).sum()
     }
 }
@@ -168,28 +78,28 @@ impl<'a> InputStreams<'a> {
 pub type Efficiency = f64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Item {
-    pub kind: u64,
-    pub module: u64,
+pub struct Product {
+    pub id: usize,
+    pub module: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecipePart {
-    pub item: Item,
-    pub amount: u64,
+    pub product: Rc<RefCell<Product>>,
+    pub amount: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Recipe {
     pub rate: Rate,
-    pub input: Vec<RecipePart>,
-    pub output: Vec<RecipePart>,
+    pub inputs: Vec<RecipePart>,
+    pub outputs: Vec<RecipePart>,
 }
 
 impl Recipe {
-    pub fn optimal_inflow_of(&self, item: Item) -> Rate {
-        self.input.iter().filter_map(|i| {
-            if i.item == item {
+    pub fn optimal_inflow_of(&self, product: Product) -> Rate {
+        self.inputs.iter().filter_map(|i| {
+            if *i.product.borrow() == product {
                 Some(self.rate * i.amount)
             } else {
                 None
@@ -197,9 +107,9 @@ impl Recipe {
         }).fold(Rate::ZERO, |acc, f| acc + f)
     }
 
-    pub fn optimal_outflow_of(&self, item: Item) -> Rate {
-        self.output.iter().filter_map(|i| {
-            if i.item == item {
+    pub fn optimal_outflow_of(&self, product: Product) -> Rate {
+        self.outputs.iter().filter_map(|i| {
+            if *i.product.borrow() == product {
                 Some(self.rate * i.amount)
             } else {
                 None

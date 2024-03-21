@@ -1,6 +1,6 @@
 mod tokens;
 
-use chumsky::{error, text::int, Parser};
+use chumsky::{error, Parser};
 pub use tokens::Token;
 
 #[derive(Clone, Copy, Debug)]
@@ -34,7 +34,7 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
         .chain::<char, _, _>(text::digits(10))
         .then_ignore(just("ms").or_not())
         .collect::<String>()
-        .map(|t| t.parse::<i64>().unwrap_or(0))
+        .map(|t| t.parse::<isize>().unwrap_or(0))
         .map(|t| Token::Int(t));
 
     // strings
@@ -77,7 +77,7 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
         | "producer"
         | "machine"
         | "recipe"
-        | "item" => Token::Keyword(ident),
+        | "product" => Token::Keyword(ident),
         "true" => Token::True,
         "false" => Token::False,
         _ => Token::Ident(ident),
@@ -87,11 +87,9 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
     let token = choice((float, int, string, op, ctrl, ident));
     let comment = just("//").then(take_until(just('\n'))).padded().ignored();
 
-    let glorp = token
+    token
         .padded_by(comment.repeated())
         .padded()
         .repeated()
-        .then_ignore(end());
-
-    glorp
+        .then_ignore(end())
 }
