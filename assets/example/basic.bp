@@ -9,6 +9,7 @@ recipe CopperWire(copper_plate) -> 2 * copper_wire / 1000ms;
 recipe GreenChips(iron_plate, 3 * copper_wire) -> green_chip / 1000ms;
 
 let ironPlates = IronPlates() * 2;
-let copperPlates = CopperPlates() * 3;
-let copperWire = CopperWire(CopperPlates() * 3) * 3;
+let copperPlates = CopperPlates() * 1;
+let copperWire = CopperWire(copperPlates) * 3;
 let greenChips = GreenChips(ironPlates, copperWire) * 2;
+greenChips.buffer(green_chip, 300);

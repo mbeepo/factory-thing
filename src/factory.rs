@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
 
-use crate::{lang::parser::{Expr, InfixOp, Literal}, rate::Rate, Product, Recipe, RecipePart, Stream};
+use crate::{lang::parser::{Expr, InfixOp, Literal}, rate::Rate, Buffer, Product, Recipe, RecipePart, Stream};
 
 #[derive(Clone, Debug)]
 pub struct Factory {
@@ -17,12 +17,18 @@ pub enum Value {
     Stream(String, Rc<RefCell<Stream>>),
     RecipePart(RecipePart),
     Call(Box<Value>, Vec<Value>),
-    InfixOp(Box<Value>, InfixOp, Box<Value>),
     MultRecipe(Box<Value>, usize),
+    Method(Box<Method>),
     Int(isize),
     Float(f64),
     String(String),
     Bool(bool)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Method {
+    pub object: Value,
+    pub name: String,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +36,7 @@ pub enum FactoryError {
     Glorp,
     Gleep,
     Exists,
+    InvalidArguments,
 }
 
 impl Display for Value {
@@ -42,7 +49,6 @@ impl Display for Value {
                 let rhs = rhs.iter().fold(String::new(), |acc, e| format!("{acc}, {e}"));
                 format!("Call {{ {lhs}({}) }}", rhs)
             },
-            Self::InfixOp(lhs, op, rhs) => format!("InfixOp {{ {lhs} {op} {rhs} }}"),
             e => format!("{:?}", e),
         };
 
@@ -69,28 +75,28 @@ impl Factory {
 
     pub fn add_mod(&mut self, ast: Vec<Expr>) -> Result<(), FactoryError> {
         for expr in ast {
-            self.process_expr(expr)?;
+            self.process_expr(expr, "__BASE")?;
         }
 
         Ok(())
     }
 
-    fn process_expr(&mut self, expr: Expr) -> Result<Option<Value>, FactoryError> {
+    fn process_expr(&mut self, expr: Expr, module: &str) -> Result<Option<Value>, FactoryError> {
         match expr {
             Expr::Product { name } => {
-                self.register_product(&name, "__BASE")?;
+                self.register_product(&name, module)?;
                 Ok(None)
             },
             Expr::Recipe { name, inputs, outputs, period } => {
-                self.register_recipe(&name, inputs, outputs, *period, "__BASE")?;
+                self.register_recipe(&name, inputs, outputs, *period, module)?;
                 Ok(None)
             },
             Expr::Assign { name, rhs } => {
-                self.register_stream(&name, *rhs, "__BASE")?;
+                self.register_stream(&name, *rhs, module)?;
                 Ok(None)
             }
             Expr::Ident(ident) => {
-                let id = id(&ident, "__BASE");
+                let id = id(&ident, module);
 
                 if let Some(product) = self.products.get(&id) {
                     Ok(Some(Value::Product(id, product.clone())))
@@ -103,23 +109,31 @@ impl Factory {
                 }
             },
             Expr::Call { lhs, args } => {
-                let lhs = self.process_expr(*lhs)?.unwrap();
+                let lhs = self.process_expr(*lhs, module)?.unwrap();
                 let mut args_out = Vec::with_capacity(args.len());
 
                 for expr in args {
-                    if let Some(value) = self.process_expr(expr)? {
+                    if let Some(value) = self.process_expr(expr, module)? {
                         args_out.push(value);
                     } else {
                         return Err(FactoryError::Glorp)
                     }
                 }
 
-                Ok(Some(Value::Call(Box::new(lhs), args_out)))
+                match lhs {
+                    Value::Method(method) => {
+                        self.call(*method, args_out)
+                    },
+                    Value::Recipe(..) => {
+                        Ok(Some(Value::Call(Box::new(lhs), args_out)))
+                    },
+                    _ => unimplemented!()
+                }
             }
             Expr::InfixOp { lhs, op, rhs } => {
                 // unwrapping is fine here cause only expressions that return Some from this method should be put in an InfixOp
-                let lhs = self.process_expr(*lhs)?.unwrap();
-                let rhs = self.process_expr(*rhs)?.unwrap();
+                let lhs = self.process_expr(*lhs, module)?.unwrap();
+                let rhs = self.process_expr(*rhs, module)?.unwrap();
 
                 Ok(Some(self.process_op(lhs, op, rhs)))
             },
@@ -130,7 +144,12 @@ impl Factory {
                     Literal::String(e) => Value::String(e),
                     Literal::Bool(e) => Value::Bool(e),
                 }))
-            }
+            },
+            Expr::Access { lhs, rhs } => {
+                let lhs = self.process_expr(*lhs, module)?.unwrap();
+
+                Ok(Some(lhs.access(&rhs)))
+            },
             _ => todo!("{:?}", expr),
         }
     }
@@ -148,15 +167,7 @@ impl Factory {
             (Value::MultRecipe(recipe, mult), InfixOp::Mul, Value::Int(mult2))
             | (Value::Int(mult2), InfixOp::Mul, Value::MultRecipe(recipe, mult)) => {
                 Value::MultRecipe(recipe, mult * mult2 as usize)
-            }
-            (Value::InfixOp(lhs, op, rhs2), _, _) => {
-                let lhs = self.process_op(*lhs, op, *rhs2);
-                self.process_op(lhs, op, rhs)
             },
-            (_, _, Value::InfixOp(lhs2, op, rhs)) => {
-                let rhs = self.process_op(*lhs2, op, *rhs);
-                self.process_op(lhs, op, rhs)
-            }
             (Value::Int(lhs), InfixOp::Mul, Value::Int(rhs)) => Value::Int(lhs * rhs),
             (lhs, op, rhs) => panic!("Invalid operation: `{lhs:?} {op:?} {rhs:?}`"),
         }
@@ -179,10 +190,10 @@ impl Factory {
     fn register_recipe(&mut self, name: &str, inputs: Vec<Expr>, outputs: Vec<Expr>, period: Expr, module: &str) -> Result<(), FactoryError> {
         if self.recipes.get(name).is_none() {
             let id = id(name, module);
-            let inputs = self.parts_from_exprs(inputs)?;
-            let outputs = self.parts_from_exprs(outputs)?;
-            let period = self.usize_from_expr(period)?;
-            let rate = Rate { amount: 1, freq: 1.0 / period as f64 };
+            let inputs = self.parts_from_exprs(inputs, module)?;
+            let outputs = self.parts_from_exprs(outputs, module)?;
+            let period = self.usize_from_expr(period, module)?;
+            let rate = Rate { amount: 1, time: period as f64 };
             let recipe = Recipe {
                 rate,
                 inputs,
@@ -200,7 +211,7 @@ impl Factory {
     fn register_stream(&mut self, name: &str, expr: Expr, module: &str) -> Result<(), FactoryError> {
         if self.streams.get(name).is_none() {
             let id = id(name, module);
-            let stream = self.stream_from_expr(expr)?;
+            let stream = self.stream_from_expr(expr, module)?;
 
             self.streams.insert(id, stream);
 
@@ -220,10 +231,10 @@ impl Factory {
         id
     }
 
-    fn parts_from_exprs(&mut self, exprs: Vec<Expr>) -> Result<Vec<RecipePart>, FactoryError> {
+    fn parts_from_exprs(&mut self, exprs: Vec<Expr>, module: &str) -> Result<Vec<RecipePart>, FactoryError> {
         let mut parts = Vec::with_capacity(exprs.len());
         for expr in exprs {
-            if let Some(value) = self.process_expr(expr)? {
+            if let Some(value) = self.process_expr(expr, module)? {
                 let recipe_part = match value {
                     Value::RecipePart(recipe_part) => recipe_part,
                     Value::Product(_, product) => RecipePart { product, amount: 1 },
@@ -239,8 +250,8 @@ impl Factory {
         Ok(parts)
     }
 
-    fn usize_from_expr(&mut self, expr: Expr) -> Result<usize, FactoryError> {
-        if let Some(value) = self.process_expr(expr)? {
+    fn usize_from_expr(&mut self, expr: Expr, module: &str) -> Result<usize, FactoryError> {
+        if let Some(value) = self.process_expr(expr, module)? {
             match value {
                 Value::Int(out) => Ok(out as usize),
                 _ => Err(FactoryError::Gleep)
@@ -250,7 +261,7 @@ impl Factory {
         }
     }
 
-    fn stream_from_expr(&mut self, expr: Expr) -> Result<Rc<RefCell<Stream>>, FactoryError> {
+    fn stream_from_expr(&mut self, expr: Expr, module: &str) -> Result<Rc<RefCell<Stream>>, FactoryError> {
         fn parse_call(call: Value) -> Result<Rc<RefCell<Stream>>, FactoryError> {
             let Value::Call(lhs, rhs) = call else {
                 return Err(FactoryError::Gleep);
@@ -278,10 +289,17 @@ impl Factory {
                 }
             }
 
-            Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into() })))
+            let mut buffer = HashMap::new();
+
+            for output in &recipe.borrow().outputs {
+                let product = output.product.borrow().clone();
+                buffer.insert(product, Buffer::ZERO);
+            }
+
+            Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer })))
         }
 
-        if let Some(value) = self.process_expr(expr)? {
+        if let Some(value) = self.process_expr(expr, module)? {
             match value {
                 Value::Call(..) => {
                     parse_call(value)
@@ -295,8 +313,40 @@ impl Factory {
             Err(FactoryError::Glorp)
         }
     }
+
+    pub fn call(&mut self, method: Method, args: Vec<Value>) -> Result<Option<Value>, FactoryError> {
+        match (method.object, method.name) {
+            (Value::Stream(_, stream), name) => {
+                match name.as_ref() {
+                    "buffer" => match args.as_slice() {
+                        &[Value::Product(_, ref product), Value::Int(buffer)] => {
+                            stream.borrow_mut().buffer.get_mut(&product.borrow()).unwrap().max = buffer as usize;
+                            Ok(None)
+                        },
+                        _ => Err(FactoryError::InvalidArguments)
+                    },
+                    _ => unimplemented!()
+                }
+            },
+            _ => unimplemented!()
+        }
+    }
 }
 
 fn id(name: &str, module: &str) -> String {
     format!("{module}::{name}")
+}
+
+impl Value {
+    pub fn access(&self, rhs: &str) -> Value {
+        match self {
+            Self::Stream(..) => {
+                match rhs {
+                    "buffer" => Value::Method(Box::new(Method { object: self.clone(), name: rhs.to_owned() })),
+                    _ => unimplemented!(),
+                }
+            },
+            _ => unimplemented!(),
+        }
+    }
 }
