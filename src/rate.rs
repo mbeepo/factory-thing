@@ -14,7 +14,7 @@ impl Rate {
     pub const UNIT: Self = Self { amount: 1, time: 1.0 };
     pub const ZERO: Self = Self { amount: 0, time: 1.0 };
     pub fn normalize(&self) -> f64 {
-        self.time / if self.amount == 0 { 1.0 } else { self.amount as f64 }
+        self.time / self.amount as f64
     }
 }
 
@@ -58,17 +58,17 @@ impl MulAssign<f64> for Rate {
 impl Div<f64> for Rate {
     type Output = Rate;
 
-    fn div(self, efficiency: f64) -> Self::Output {
+    fn div(self, rhs: f64) -> Self::Output {
         Rate {
             amount: self.amount,
-            time: self.time / efficiency,
+            time: self.time * rhs,
         }
     }
 }
 
 impl DivAssign<f64> for Rate {
-    fn div_assign(&mut self, efficiency: f64) {
-        self.time /= efficiency;
+    fn div_assign(&mut self, rhs: f64) {
+        self.time *= rhs;
     }
 }
 
@@ -76,14 +76,18 @@ impl Add<Rate> for Rate {
     type Output = Rate;
 
     fn add(self, rhs: Rate) -> Self::Output {
-        if self.time == rhs.time {
+        if self.time == rhs.time || rhs.amount == 0 {
             Self {
                 amount: self.amount + rhs.amount,
                 ..self
             }
+        } else if self.amount == 0 {
+            Self {
+                amount: self.amount + rhs.amount,
+                ..rhs
+            }  
         } else {
             let time = (self.normalize()) + (rhs.normalize());
-            println!("{} + {} = {time}", self.normalize(), rhs.normalize());
 
             Self {
                 amount: 1,
@@ -105,7 +109,7 @@ impl Div<Rate> for Rate {
     type Output = Efficiency;
 
     fn div(self, rhs: Rate) -> Self::Output {
-        self.normalize() / rhs.normalize()
+        rhs.normalize() / self.normalize()
     }
 }
 
