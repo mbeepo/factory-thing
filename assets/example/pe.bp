@@ -1,0 +1,31 @@
+product coal;
+product coke;
+product coal_tar;
+product hydrogen_sulfide;
+product oxygen;
+product sulfuric_acid;
+product ethanol;
+product ethylene;
+product polyethylene;
+
+recipe Coal() -> coal / 1ms;
+recipe Coke(coal * 16) -> coke * 16 / 16000ms;
+recipe CoalTar(coke * 8) -> coal_tar * 4000 / 16000ms;
+recipe HydrogenSulfide(coal_tar * 1000) -> hydrogen_sulfide * 300 / 8000ms;
+recipe Oxygen() -> oxygen * 1000 / 1ms;
+recipe SulfuricAcid(hydrogen_sulfide * 1000, oxygen * 4000) -> sulfuric_acid * 1000 / 16000;
+recipe Ethanol() -> ethanol * 1000 / 1ms;
+recipe Ethylene(sulfuric_acid * 1000, ethanol * 1000) -> ethylene * 1000 / 60000ms;
+recipe Polyethylene(ethylene * 144, oxygen * 1000) -> polyethylene * 216 / 8000ms;
+
+let s_coal = Coal();
+let s_coke = Coke(s_coal);
+let s_coalTar = CoalTar(s_coke);
+let s_hydrogenSulfide = HydrogenSulfide(s_coalTar);
+let s_oxygen = Oxygen();
+let s_sulfuricAcid = SulfuricAcid(s_hydrogenSulfide, s_oxygen);
+let s_ethanol = Ethanol();
+let s_ethylene = Ethylene(s_sulfuricAcid, s_ethanol);
+let s_oxygen2 = Oxygen();
+let s_polyethylene = Polyethylene(s_ethylene, s_oxygen2);
+s_polyethylene.buffer(polyethylene, 32768);

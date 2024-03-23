@@ -37,6 +37,7 @@ pub enum FactoryError {
     Gleep,
     Exists,
     InvalidArguments,
+    ItemNotFound,
 }
 
 impl Display for Value {
@@ -58,11 +59,12 @@ impl Display for Value {
 
 impl Factory {
     pub fn new() -> Self {
-        let products = HashMap::new();
+        let mut products = HashMap::new();
         let recipes = HashMap::new();
         let streams = HashMap::new();
         let mut modules = HashMap::new();
 
+        products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: 0, module: 0 })));
         modules.insert("__BASE".to_owned(), 0);
 
         Self {
@@ -70,6 +72,52 @@ impl Factory {
             recipes,
             streams,
             modules,
+        }
+    }
+
+    pub fn solve(&mut self, stream: Rc<RefCell<Stream>>) {
+        let efficiency = stream.borrow().efficiency();
+        let mut changes: Vec<(Rc<RefCell<Stream>>, usize)> = Vec::with_capacity(4);
+
+        if efficiency < 1.0 {
+            // balance and solve each input
+            for input in &stream.borrow().inputs.inner {
+                for ingredient in &stream.borrow().recipe.borrow().inputs {
+                    let product = &*ingredient.product.borrow();
+                    if let Some(optimal) = stream.borrow().recipe.borrow().optimal_inflow_of(product) {
+                        let optimal = optimal * stream.borrow().mult;
+
+                        if let Some(rate) = input.borrow().recipe.borrow().optimal_outflow_of(product) {
+                            let rate = rate * input.borrow().mult;
+
+                            if rate < optimal {
+                                println!("{} < {}", rate, optimal);
+                                let efficiency = rate / optimal;
+                                println!("{:.1}%", efficiency * 100.0);
+                                let mult = 1.0 / efficiency;
+                                println!("x{}", mult);
+                                let new_mult = input.borrow().mult as f64 * mult;
+                                changes.push((input.clone(), (new_mult - f64::EPSILON).ceil() as usize));
+                            }
+                        }
+                        
+                        if let Some(rate) = input.borrow().rate_of(product) {
+                            if rate < optimal {
+                                println!("{} < {}", rate, optimal);
+                                self.solve(input.clone());
+                            } else {
+                                println!("{} > {}", rate, optimal);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (stream, mult) in changes {
+            println!("x{mult}");
+            stream.borrow_mut().mult = mult;
+            self.solve(stream.clone());
         }
     }
 
@@ -97,13 +145,13 @@ impl Factory {
             }
             Expr::Ident(ident) => {
                 let id = id(&ident, module);
-
-                if let Some(product) = self.products.get(&id) {
-                    Ok(Some(Value::Product(id, product.clone())))
+               
+                if let Some(stream) = self.streams.get(&id) {
+                    Ok(Some(Value::Stream(id, stream.clone())))
                 } else if let Some(recipe) = self.recipes.get(&id) {
                     Ok(Some(Value::Recipe(id, recipe.clone())))
-                } else if let Some(stream) = self.streams.get(&id) {
-                    Ok(Some(Value::Stream(id, stream.clone())))
+                } else if let Some(product) = self.products.get(&id) {
+                    Ok(Some(Value::Product(id, product.clone())))
                 } else {
                     panic!("Undefined identifier: {ident}");
                 }
@@ -262,56 +310,56 @@ impl Factory {
     }
 
     fn stream_from_expr(&mut self, expr: Expr, module: &str) -> Result<Rc<RefCell<Stream>>, FactoryError> {
-        fn parse_call(call: Value) -> Result<Rc<RefCell<Stream>>, FactoryError> {
-            let Value::Call(lhs, rhs) = call else {
-                return Err(FactoryError::Gleep);
-            };
-
-            let Value::Recipe(_, recipe) = *lhs else {
-                return Err(FactoryError::Gleep)
-            };
-
-            let mut inputs = Vec::with_capacity(rhs.len());
-
-            for value in rhs {
-                match value {
-                    Value::Stream(_, stream) => inputs.push(stream),
-                    Value::Call(..) => {
-                        inputs.push(parse_call(value)?);
-                    },
-                    Value::MultRecipe(call, mult) => {
-                        inputs.push(parse_call(*call).inspect(|stream| stream.borrow_mut().mult = mult)?);
-                    },
-                    _ => {
-                        println!("{value}");
-                        return Err(FactoryError::Gleep)
-                    },
-                }
-            }
-
-            let mut buffer = HashMap::new();
-
-            for output in &recipe.borrow().outputs {
-                let product = output.product.borrow().clone();
-                buffer.insert(product, Buffer::ZERO);
-            }
-
-            Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer })))
-        }
-
         if let Some(value) = self.process_expr(expr, module)? {
             match value {
                 Value::Call(..) => {
-                    parse_call(value)
+                    self.parse_call(value)
                 },
                 Value::MultRecipe(call, mult) => {
-                    parse_call(*call).inspect(|stream| stream.borrow_mut().mult = mult)
+                    self.parse_call(*call).inspect(|stream| stream.borrow_mut().mult = mult)
                 },
                 _ => Err(FactoryError::Gleep)
             }
         } else {
             Err(FactoryError::Glorp)
         }
+    }
+
+    fn parse_call(&mut self, call: Value) -> Result<Rc<RefCell<Stream>>, FactoryError> {
+        let Value::Call(lhs, rhs) = call else {
+            return Err(FactoryError::Gleep);
+        };
+
+        let Value::Recipe(_, recipe) = *lhs else {
+            return Err(FactoryError::Gleep)
+        };
+
+        let mut inputs = Vec::with_capacity(rhs.len());
+
+        for value in rhs {
+            match value {
+                Value::Stream(id, stream) => inputs.push(stream),
+                Value::Call(..) => {
+                    inputs.push(self.parse_call(value)?);
+                },
+                Value::MultRecipe(call, mult) => {
+                    inputs.push(self.parse_call(*call).inspect(|stream| stream.borrow_mut().mult = mult)?);
+                },
+                _ => {
+                    println!("{value}");
+                    return Err(FactoryError::Gleep)
+                },
+            }
+        }
+
+        let mut buffer = HashMap::new();
+
+        for output in &recipe.borrow().outputs {
+            let product = output.product.borrow().clone();
+            buffer.insert(product, Buffer::ZERO);
+        }
+
+        Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer})))
     }
 
     pub fn call(&mut self, method: Method, args: Vec<Value>) -> Result<Option<Value>, FactoryError> {

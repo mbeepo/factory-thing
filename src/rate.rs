@@ -1,4 +1,4 @@
-use std::{iter::Sum, ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign}};
+use std::{fmt::Display, iter::Sum, ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign}};
 
 use crate::Efficiency;
 
@@ -14,7 +14,7 @@ impl Rate {
     pub const UNIT: Self = Self { amount: 1, time: 1.0 };
     pub const ZERO: Self = Self { amount: 0, time: 1.0 };
     pub fn normalize(&self) -> f64 {
-        self.time / self.amount as f64
+        self.amount as f64 / self.time
     }
 }
 
@@ -91,7 +91,7 @@ impl Add<Rate> for Rate {
 
             Self {
                 amount: 1,
-                time,
+                time: 1.0 / time,
             }
         }
     }
@@ -109,12 +109,25 @@ impl Div<Rate> for Rate {
     type Output = Efficiency;
 
     fn div(self, rhs: Rate) -> Self::Output {
-        rhs.normalize() / self.normalize()
+        self.normalize() / rhs.normalize()
     }
 }
 
 impl Sum<Rate> for Rate {
     fn sum<I: Iterator<Item = Rate>>(iter: I) -> Self {
         iter.fold(Self::ZERO, |acc, r| acc + r)
+    }
+}
+
+impl PartialOrd for Rate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        // some weirdness with fractions
+        self.normalize().partial_cmp(&other.normalize())
+    }
+}
+
+impl Display for Rate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{:.2}ms", self.amount, self.time)
     }
 }
