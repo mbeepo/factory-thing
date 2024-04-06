@@ -18,16 +18,16 @@ fn main() {
 
     let polyethylene_product = factory.products.get("__BASE::polyethylene").unwrap();
     let polyethylene = factory.streams.get("__BASE::s_polyethylene").unwrap().clone();
-    let polyethylene_rate = polyethylene.borrow().rate_of(&polyethylene_product.borrow()).unwrap();
 
-    println!("Polyethylene working at {:.1}% efficiency", polyethylene.borrow().efficiency() * 100.0);
-    println!("{}mb of polyethylene will be made every {}ms", polyethylene_rate.amount, polyethylene_rate.time);
+    println!("Polyethylene working at {:.1}% efficiency, ({})", polyethylene.borrow().efficiency() * 100.0, polyethylene.borrow().rate_of(&polyethylene_product.borrow()).unwrap());
     println!("Polyethylene buffer will be full in {}ms", polyethylene.borrow().until_full(&polyethylene_product.borrow()).unwrap_or(0));
     println!();
 
-    factory.solve(polyethylene.clone());
-
-    println!("Polyethylene now working at {:.1}% efficiency", polyethylene.borrow().efficiency() * 100.0);
+    {
+        factory.solve(polyethylene.clone());
+    }
+    let polyethylene_product = factory.products.get("__BASE::polyethylene").unwrap();
+    println!("Polyethylene now working at {:.1}% efficiency ({})", polyethylene.borrow().efficiency() * 100.0, polyethylene.borrow().rate_of(&polyethylene_product.borrow()).unwrap());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Default)]
@@ -57,7 +57,7 @@ impl Stream {
         self.recipe.borrow().inputs.iter().map(|i| {
             let rate = self.inputs.rate_of(&*i.product.borrow());
             let optimal_inflow = self.recipe.borrow().optimal_inflow_of(&*i.product.borrow()).unwrap();
-            println!("{} / ({} * {}) => {}%", rate, optimal_inflow, self.mult, (rate / (optimal_inflow * self.mult)) * 100.0);
+            // println!("{}: {} / ({} * {}) => {}%", i.product.borrow().id, rate, optimal_inflow, self.mult, (rate / (optimal_inflow * self.mult)) * 100.0);
             rate / (optimal_inflow * self.mult)
         }).reduce(Efficiency::min).unwrap_or(0.0).min(1.0)
     }
