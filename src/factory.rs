@@ -5,6 +5,7 @@ use crate::{lang::parser::{Expr, InfixOp, Literal}, rate::Rate, Buffer, Product,
 #[derive(Clone, Debug)]
 pub struct Factory {
     pub products: HashMap<String, Rc<RefCell<Product>>>,
+    pub product_names: HashMap<Product, String>,
     pub recipes: HashMap<String, Rc<RefCell<Recipe>>>,
     pub streams: HashMap<String, Rc<RefCell<Stream>>>,
     pub modules: HashMap<String, usize>,
@@ -60,15 +61,17 @@ impl Display for Value {
 impl Factory {
     pub fn new() -> Self {
         let mut products = HashMap::new();
+        let product_names = HashMap::new();
         let recipes = HashMap::new();
         let streams = HashMap::new();
         let mut modules = HashMap::new();
 
         products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: 0, module: 0 })));
-        modules.insert("__BASE".to_owned(), 0);
+        modules.insert("factory".to_owned(), 0);
 
         Self {
             products,
+            product_names,
             recipes,
             streams,
             modules,
@@ -91,11 +94,8 @@ impl Factory {
                             let rate = rate * input.borrow().mult;
 
                             if rate < optimal {
-                                println!("{} < {}", rate, optimal);
                                 let efficiency = rate / optimal;
-                                println!("{:.1}%", efficiency * 100.0);
                                 let mult = 1.0 / efficiency;
-                                println!("x{}", mult);
                                 let new_mult = input.borrow().mult as f64 * mult;
                                 changes.push((input.clone(), (new_mult - f64::EPSILON).ceil() as usize));
                             }
@@ -123,7 +123,7 @@ impl Factory {
 
     pub fn add_mod(&mut self, ast: Vec<Expr>) -> Result<(), FactoryError> {
         for expr in ast {
-            self.process_expr(expr, "__BASE")?;
+            self.process_expr(expr, "factory")?;
         }
 
         Ok(())
@@ -225,9 +225,12 @@ impl Factory {
         if self.products.get(name).is_none() {
             let module_id = self.get_module(module);
             let product_id = self.products.get("__next").map(|i| i.borrow().id).unwrap_or(0);
+            let product = Product { id: product_id, module: module_id };
+            let name = id(name, module);
 
             self.products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: product_id + 1, module: 0 })));
-            self.products.insert(id(name, module), Rc::new(RefCell::new(Product { id: product_id, module: module_id })));
+            self.products.insert(name.clone(), Rc::new(RefCell::new(product)));
+            self.product_names.insert(product, name);
 
             Ok(())
         } else {
@@ -364,7 +367,7 @@ impl Factory {
 
     pub fn call(&mut self, method: Method, args: Vec<Value>) -> Result<Option<Value>, FactoryError> {
         match (method.object, method.name) {
-            (Value::Stream(_, stream), name) => {
+            (Value::Stream(stream_name, stream), name) => {
                 match name.as_ref() {
                     "buffer" => match args.as_slice() {
                         &[Value::Product(_, ref product), Value::Int(buffer)] => {
@@ -373,6 +376,41 @@ impl Factory {
                         },
                         _ => Err(FactoryError::InvalidArguments)
                     },
+                    "solve" => match args.as_slice() {
+                        &[] => {
+                            self.solve(stream.clone());
+                            Ok(None)
+                        }
+                        _ => Err(FactoryError::InvalidArguments)
+                    },
+                    "log" => {
+                        let outputs = if args.len() == 0 {
+                            stream.borrow().recipe.borrow().outputs.clone()
+                        } else {
+                            let mut out = Vec::new();
+
+                            for product in args {
+                                if let Value::Product(_, product) = product {
+                                    if let Some(recipe_part) = stream.borrow().recipe.borrow().outputs.iter().find(|e| e.product == product) {
+                                        out.push(recipe_part.clone());
+                                    }
+                                }
+
+                            }
+
+                            out
+                        };
+
+                        println!("----- {stream_name} -----");
+                        for output in outputs {
+                            // if the product isnt in the stream something went wrong so a panic is actually desired
+                            let rate = stream.borrow().rate_of(&*output.product.borrow()).unwrap();
+                            let name = self.product_names.get(&*output.product.borrow()).unwrap();
+                            println!("  {} @ {}", name, rate);
+                        }
+
+                        Ok(None)
+                    }
                     _ => unimplemented!()
                 }
             },
@@ -390,7 +428,9 @@ impl Value {
         match self {
             Self::Stream(..) => {
                 match rhs {
-                    "buffer" => Value::Method(Box::new(Method { object: self.clone(), name: rhs.to_owned() })),
+                    "buffer"
+                    | "solve"
+                    | "log" => Value::Method(Box::new(Method { object: self.clone(), name: rhs.to_owned() })),
                     _ => unimplemented!(),
                 }
             },
