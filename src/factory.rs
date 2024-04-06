@@ -359,7 +359,7 @@ impl Factory {
             buffer.insert(product, Buffer::ZERO);
         }
 
-        Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer})))
+        Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer, next: 0 })))
     }
 
     pub fn call(&mut self, method: Method, args: Vec<Value>) -> Result<Option<Value>, FactoryError> {
