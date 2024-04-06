@@ -9,12 +9,11 @@ mod lang;
 mod rate;
 
 fn main() {
-    let source = include_str!("../assets/example/pe.bp");
+    let source = include_str!("../assets/example/bigamount.bp");
     let lex = lang::lexer().parse(source).unwrap();
     let ast = lang::parser().parse(lex).unwrap();
     let mut factory = Factory::new();
     factory.add_mod(ast).unwrap();
-
 
     let polyethylene_product = factory.products.get("__BASE::polyethylene").unwrap();
     let polyethylene = factory.streams.get("__BASE::s_polyethylene").unwrap().clone();
