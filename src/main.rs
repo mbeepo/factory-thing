@@ -46,6 +46,8 @@ pub struct Stream {
     pub recipe: Rc<RefCell<Recipe>>,
     pub inputs: InputStreams,
     pub buffer: HashMap<Product, Buffer>,
+    /// How many ticks until next output
+    pub next: usize,
 }
 
 impl Stream {
