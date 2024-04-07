@@ -244,7 +244,7 @@ impl Factory {
             let inputs = self.parts_from_exprs(inputs, module)?;
             let outputs = self.parts_from_exprs(outputs, module)?;
             let period = self.usize_from_expr(period, module)?;
-            let rate = Rate { amount: 1, time: period as f64 };
+            let rate = Rate { amount: 1, ticks: period as f64 };
             let recipe = Recipe {
                 rate,
                 inputs,
@@ -362,7 +362,7 @@ impl Factory {
             buffer.insert(product, Buffer::ZERO);
         }
 
-        Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer, next: 0 })))
+        Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer, next: None })))
     }
 
     pub fn call(&mut self, method: Method, args: Vec<Value>) -> Result<Option<Value>, FactoryError> {
@@ -415,6 +415,12 @@ impl Factory {
                 }
             },
             _ => unimplemented!()
+        }
+    }
+
+    pub fn tick(&mut self, ticks: usize) {
+        for stream in self.streams.values() {
+            
         }
     }
 }

@@ -1,13 +1,15 @@
-product centi;
-product one;
+product p_centi;
+product p_one;
+product p_extra;
 
-recipe Centi() -> centi * 15 / 1000ms;
-recipe One(centi * 100) -> one / 1000ms;
+recipe Centi() -> p_centi * 15 / 1000ms;
+recipe One(p_centi * 100) -> (p_one, p_extra * 5) / 1000ms;
 
-let s_centi = Centi();
-let s_one = One(s_centi);
+let centi = Centi();
+let one = One(centi);
 
-s_centi.log();
-s_one.log();
-s_one.solve();
-s_one.log();
+centi.log();
+one.log();
+one.solve();
+centi.log();
+one.log();

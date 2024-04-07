@@ -14,19 +14,6 @@ fn main() {
     let ast = lang::parser().parse(lex).unwrap();
     let mut factory = Factory::new();
     factory.add_mod(ast).unwrap();
-
-    let polyethylene_product = factory.products.get("__BASE::polyethylene").unwrap();
-    let polyethylene = factory.streams.get("__BASE::s_polyethylene").unwrap().clone();
-
-    println!("Polyethylene working at {:.1}% efficiency, ({})", polyethylene.borrow().efficiency() * 100.0, polyethylene.borrow().rate_of(&polyethylene_product.borrow()).unwrap());
-    println!("Polyethylene buffer will be full in {}ms", polyethylene.borrow().until_full(&polyethylene_product.borrow()).unwrap_or(0));
-    println!();
-
-    {
-        factory.solve(polyethylene.clone());
-    }
-    let polyethylene_product = factory.products.get("__BASE::polyethylene").unwrap();
-    println!("Polyethylene now working at {:.1}% efficiency ({})", polyethylene.borrow().efficiency() * 100.0, polyethylene.borrow().rate_of(&polyethylene_product.borrow()).unwrap());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Default)]
@@ -46,7 +33,7 @@ pub struct Stream {
     pub inputs: InputStreams,
     pub buffer: HashMap<Product, Buffer>,
     /// How many ticks until next output
-    pub next: usize,
+    pub next: Option<usize>,
 }
 
 impl Stream {
@@ -76,9 +63,9 @@ impl Stream {
         if buffer.max > 0 {
             let rate = self.rate_of(product)?;
             let packets = (buffer.max - buffer.current) / rate.amount;
-            let time = packets as f64 * rate.time;
+            let ticks = packets as f64 * rate.ticks;
 
-            Some(time as usize)
+            Some(ticks as usize)
         } else {
             None
         }

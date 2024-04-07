@@ -148,11 +148,12 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
         .ignore_then(ident)
         .then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
         .then_ignore(just(Token::Output))
-        .then(products.clone())
+        .then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))).or(products.clone()))
         .then_ignore(just(Token::InfixOp("/".to_owned())))
         .then(expr.clone())
         .boxed()
         .map(|(((name, inputs), outputs), period)| {
+            dbg!(&outputs);
             Expr::Recipe { name, inputs, outputs, period: Box::new(period) }
         });
 

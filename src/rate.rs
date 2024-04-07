@@ -6,15 +6,15 @@ use crate::Efficiency;
 pub struct Rate {
     /// Number of outputs per packet
     pub amount: usize,
-    /// Number of output packets per time unit
-    pub time: f64,
+    /// Number of output packets per tick
+    pub ticks: f64,
 }
 
 impl Rate {
-    pub const UNIT: Self = Self { amount: 1, time: 1.0 };
-    pub const ZERO: Self = Self { amount: 0, time: 1.0 };
+    pub const UNIT: Self = Self { amount: 1, ticks: 1.0 };
+    pub const ZERO: Self = Self { amount: 0, ticks: 1.0 };
     pub fn normalize(&self) -> f64 {
-        self.amount as f64 / self.time
+        self.amount as f64 / self.ticks
     }
 }
 
@@ -36,7 +36,7 @@ impl Mul<f64> for Rate {
     
     fn mul(self, efficiency: f64) -> Self::Output {
         Rate {
-            time: self.time / efficiency,
+            ticks: self.ticks / efficiency,
             ..self
         }
     }
@@ -51,7 +51,7 @@ impl MulAssign<usize> for Rate {
 
 impl MulAssign<f64> for Rate {
     fn mul_assign(&mut self, efficiency: f64) {
-        self.time /= efficiency;
+        self.ticks /= efficiency;
     }
 }
 
@@ -61,14 +61,14 @@ impl Div<f64> for Rate {
     fn div(self, rhs: f64) -> Self::Output {
         Rate {
             amount: self.amount,
-            time: self.time * rhs,
+            ticks: self.ticks * rhs,
         }
     }
 }
 
 impl DivAssign<f64> for Rate {
     fn div_assign(&mut self, rhs: f64) {
-        self.time *= rhs;
+        self.ticks *= rhs;
     }
 }
 
@@ -76,7 +76,7 @@ impl Add<Rate> for Rate {
     type Output = Rate;
 
     fn add(self, rhs: Rate) -> Self::Output {
-        if self.time == rhs.time || rhs.amount == 0 {
+        if self.ticks == rhs.ticks || rhs.amount == 0 {
             Self {
                 amount: self.amount + rhs.amount,
                 ..self
@@ -87,11 +87,11 @@ impl Add<Rate> for Rate {
                 ..rhs
             }  
         } else {
-            let time = (self.normalize()) + (rhs.normalize());
+            let ticks = (self.normalize()) + (rhs.normalize());
 
             Self {
                 amount: 1,
-                time: 1.0 / time,
+                ticks: 1.0 / ticks,
             }
         }
     }
@@ -101,7 +101,7 @@ impl AddAssign<Rate> for Rate {
     fn add_assign(&mut self, rhs: Rate) {
         let new = *self + rhs;
         self.amount = new.amount;
-        self.time = new.time;
+        self.ticks = new.ticks;
     }
 }
 
@@ -128,6 +128,6 @@ impl PartialOrd for Rate {
 
 impl Display for Rate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{:.2}ms", self.amount, self.time)
+        write!(f, "{}/{:.2}ms", self.amount, self.ticks)
     }
 }
