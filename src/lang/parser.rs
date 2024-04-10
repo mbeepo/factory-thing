@@ -153,7 +153,6 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
         .then(expr.clone())
         .boxed()
         .map(|(((name, inputs), outputs), period)| {
-            dbg!(&outputs);
             Expr::Recipe { name, inputs, outputs, period: Box::new(period) }
         });
 

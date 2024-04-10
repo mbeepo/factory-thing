@@ -1,0 +1,10 @@
+let wheat = Wheat();
+let iron = Iron();
+let ironPowder = IronPowder(iron);
+let ironwheat = Ironwheat(wheat, ironPowder) * 5;
+
+ironwheat.solve();
+wheat.log();
+iron.log();
+ironPowder.log();
+ironwheat.log();

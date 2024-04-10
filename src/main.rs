@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fs::{read_dir, read_to_string}, path::Path, rc::Rc};
 
 use chumsky::Parser;
 
@@ -9,11 +9,30 @@ mod lang;
 mod rate;
 
 fn main() {
-    let source = include_str!("../assets/example/bigamount.bp");
-    let lex = lang::lexer().parse(source).unwrap();
+    let basemod_path = Path::new("assets/mods/basemod");
+    let basemod = read_dir(basemod_path).unwrap();
+    let mut basemod_src = String::with_capacity(1024);
+    
+    for entry in basemod {
+        if let Ok(entry) = entry {
+            if entry.metadata().unwrap().is_file() {
+                if let Ok(src) = read_to_string(Path::join(basemod_path, entry.file_name())) {
+                    basemod_src += &src;
+                }
+            }
+        }
+    }
+
+    let lex = lang::lexer().parse(basemod_src).unwrap();
     let ast = lang::parser().parse(lex).unwrap();
     let mut factory = Factory::new();
     factory.add_mod(ast).unwrap();
+
+    let factory_src = read_to_string("assets/factory/main.bp").unwrap();
+
+    let lex = lang::lexer().parse(factory_src).unwrap();
+    let ast = lang::parser().parse(lex).unwrap();
+    factory.add_factory(ast).unwrap();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Default)]

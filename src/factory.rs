@@ -103,10 +103,7 @@ impl Factory {
                         
                         if let Some(rate) = input.borrow().rate_of(product) {
                             if rate < optimal {
-                                println!("{} < {}", rate, optimal);
                                 self.solve(input.clone());
-                            } else {
-                                println!("{} > {}", rate, optimal);
                             }
                         }
                     }
@@ -115,7 +112,6 @@ impl Factory {
         }
 
         for (stream, mult) in changes {
-            println!("x{mult}");
             stream.borrow_mut().mult = mult;
             self.solve(stream.clone());
         }
@@ -123,7 +119,25 @@ impl Factory {
 
     pub fn add_mod(&mut self, ast: Vec<Expr>) -> Result<(), FactoryError> {
         for expr in ast {
-            self.process_expr(expr, "factory")?;
+            self.process_expr(expr, "base")?;
+        }
+
+        Ok(())
+    }
+
+    pub fn add_factory(&mut self, ast: Vec<Expr>) -> Result<(), FactoryError> {
+        for expr in ast {
+            self.process_user_expr(expr)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn process_user_expr(&mut self, expr: Expr) -> Result<(), FactoryError> {
+        match expr {
+            Expr::Product { .. }
+            | Expr::Recipe { .. } => {},
+            _ => { self.process_expr(expr, "factory")?; }
         }
 
         Ok(())
@@ -144,14 +158,12 @@ impl Factory {
                 Ok(None)
             }
             Expr::Ident(ident) => {
-                let id = id(&ident, module);
-               
-                if let Some(stream) = self.streams.get(&id) {
-                    Ok(Some(Value::Stream(id, stream.clone())))
-                } else if let Some(recipe) = self.recipes.get(&id) {
-                    Ok(Some(Value::Recipe(id, recipe.clone())))
-                } else if let Some(product) = self.products.get(&id) {
-                    Ok(Some(Value::Product(id, product.clone())))
+                if let Some(stream) = self.streams.get(&ident) {
+                    Ok(Some(Value::Stream(ident, stream.clone())))
+                } else if let Some(recipe) = self.recipes.get(&ident) {
+                    Ok(Some(Value::Recipe(ident, recipe.clone())))
+                } else if let Some(product) = self.products.get(&ident) {
+                    Ok(Some(Value::Product(ident, product.clone())))
                 } else {
                     panic!("Undefined identifier: {ident}");
                 }
@@ -226,11 +238,10 @@ impl Factory {
             let module_id = self.get_module(module);
             let product_id = self.products.get("__next").map(|i| i.borrow().id).unwrap_or(0);
             let product = Product { id: product_id, module: module_id };
-            let name = id(name, module);
 
             self.products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: product_id + 1, module: 0 })));
-            self.products.insert(name.clone(), Rc::new(RefCell::new(product)));
-            self.product_names.insert(product, name);
+            self.products.insert(name.to_owned(), Rc::new(RefCell::new(product)));
+            self.product_names.insert(product, name.to_owned());
 
             Ok(())
         } else {
@@ -240,7 +251,6 @@ impl Factory {
 
     fn register_recipe(&mut self, name: &str, inputs: Vec<Expr>, outputs: Vec<Expr>, period: Expr, module: &str) -> Result<(), FactoryError> {
         if self.recipes.get(name).is_none() {
-            let id = id(name, module);
             let inputs = self.parts_from_exprs(inputs, module)?;
             let outputs = self.parts_from_exprs(outputs, module)?;
             let period = self.usize_from_expr(period, module)?;
@@ -251,7 +261,7 @@ impl Factory {
                 outputs,
             };
 
-            self.recipes.insert(id, Rc::new(RefCell::new(recipe)));
+            self.recipes.insert(name.to_owned(), Rc::new(RefCell::new(recipe)));
 
             Ok(())
         } else {
@@ -261,10 +271,9 @@ impl Factory {
 
     fn register_stream(&mut self, name: &str, expr: Expr, module: &str) -> Result<(), FactoryError> {
         if self.streams.get(name).is_none() {
-            let id = id(name, module);
             let stream = self.stream_from_expr(expr, module)?;
 
-            self.streams.insert(id, stream);
+            self.streams.insert(name.to_owned(), stream);
 
             Ok(())
         } else {
@@ -341,7 +350,7 @@ impl Factory {
 
         for value in rhs {
             match value {
-                Value::Stream(id, stream) => inputs.push(stream),
+                Value::Stream(_, stream) => inputs.push(stream),
                 Value::Call(..) => {
                     inputs.push(self.parse_call(value)?);
                 },
@@ -401,7 +410,7 @@ impl Factory {
                             out
                         };
 
-                        println!("----- {stream_name} -----");
+                        println!("----- {stream_name} x{} -----", stream.borrow().mult);
                         for output in outputs {
                             // if the product isnt in the stream something went wrong so a panic is actually desired
                             let rate = stream.borrow().rate_of(&*output.product.borrow()).unwrap();
@@ -423,10 +432,6 @@ impl Factory {
             
         }
     }
-}
-
-fn id(name: &str, module: &str) -> String {
-    format!("{module}::{name}")
 }
 
 impl Value {
