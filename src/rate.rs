@@ -4,9 +4,9 @@ use crate::Efficiency;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rate {
-    /// Number of outputs per packet
+    /// Number of items per packet
     pub amount: usize,
-    /// Number of output packets per tick
+    /// Number of ticks per packet
     pub ticks: f64,
 }
 

@@ -1,10 +1,10 @@
-let wheat = Wheat();
 let iron = Iron();
-let ironPowder = IronPowder(iron);
-let ironwheat = Ironwheat(wheat, ironPowder) * 5;
+let copper = Copper();
+let copperWire = CopperWire(copper);
+let electromagnets = Electromagnet(iron, copperWire) * 10;
 
-ironwheat.solve();
-wheat.log();
-iron.log();
-ironPowder.log();
-ironwheat.log();
+electromagnets.solve();
+electromagnets.buffer(p_electromagnet, 256);
+copperWire.buffer(p_copper_wire, 256);
+copper.buffer(p_copper, 256);
+iron.buffer(p_iron, 256);

@@ -5,12 +5,8 @@
 // ironwheat will be fed to the fleshstack for the first set of knowledge
 //
 
-product p_wheat;
-product p_iron;
 product p_iron_powder;
 product p_ironwheat;
 
-recipe Wheat()  -> p_wheat * 2  / 3000ms;
-recipe Iron()   -> p_iron       / 1000ms;
-recipe IronPowder(p_iron * 3) -> p_iron_powder * 2 / 3000ms;
-recipe Ironwheat(p_wheat * 4, p_iron_powder * 4) -> p_ironwheat / 5000ms;
+recipe IronPowder(p_iron * 3)                       -> p_iron_powder * 2    / 3000ms;
+recipe Ironwheat(p_wheat * 4, p_iron_powder * 4)    -> p_ironwheat          / 5000ms;

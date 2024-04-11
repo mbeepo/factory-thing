@@ -1,0 +1,7 @@
+product p_iron;
+product p_copper;
+product p_wheat;
+
+recipe Iron()   -> p_iron * 2   / 1000ms;
+recipe Copper() -> p_copper * 2 / 1000ms;
+recipe Wheat()  -> p_wheat * 2  / 3000ms;

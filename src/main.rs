@@ -1,6 +1,7 @@
-use std::{cell::RefCell, collections::HashMap, fs::{read_dir, read_to_string}, path::Path, rc::Rc};
+use std::{cell::RefCell, cmp::Ordering, collections::HashMap, fmt::Display, fs::{read_dir, read_to_string}, path::Path, rc::Rc, thread::sleep, time::Duration};
 
 use chumsky::Parser;
+use lang::parser::Expr;
 
 use crate::{factory::Factory, rate::Rate};
 
@@ -33,6 +34,13 @@ fn main() {
     let lex = lang::lexer().parse(factory_src).unwrap();
     let ast = lang::parser().parse(lex).unwrap();
     factory.add_factory(ast).unwrap();
+
+    let dur = Duration::from_millis(250);
+
+    loop {
+        sleep(dur);
+        factory.tick(250);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Hash, Default)]
@@ -41,8 +49,28 @@ pub struct Buffer {
     pub max: usize,
 }
 
+impl Display for Buffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.current, self.max)
+    }
+}
+
 impl Buffer {
     pub const ZERO: Self = Buffer { current: 0, max: 0 };
+
+    pub fn space_left(&self) -> usize {
+        self.max - self.current
+    }
+
+    pub fn fill_from(&mut self, other: &mut Buffer) {
+        if self.space_left() >= other.current {
+            self.current += other.current;
+            other.current = 0;
+        } else {
+            other.current -= self.space_left();
+            self.current = self.max;
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,9 +78,10 @@ pub struct Stream {
     pub mult: usize,
     pub recipe: Rc<RefCell<Recipe>>,
     pub inputs: InputStreams,
-    pub buffer: HashMap<Product, Buffer>,
+    pub buffers: HashMap<Product, Buffer>,
     /// How many ticks until next output
     pub next: Option<usize>,
+    pub ticks: usize,
 }
 
 impl Stream {
@@ -77,7 +106,7 @@ impl Stream {
     }
 
     pub fn until_full(&self, product: &Product) -> Option<usize> {
-        let buffer = self.buffer.get(product)?;
+        let buffer = self.buffers.get(product)?;
 
         if buffer.max > 0 {
             let rate = self.rate_of(product)?;
@@ -89,19 +118,51 @@ impl Stream {
             None
         }
     }
+
+    pub fn try_produce(&mut self) -> bool {
+        let mut to_satisfy = self.recipe.borrow().inputs.len();
+
+        for input in self.recipe.borrow().inputs.clone() {
+            let buffered = self.buffers.get(&*input.product.borrow()).map(|b| b.current).unwrap_or(0);
+            
+            if buffered >= self.recipe.borrow().required_of(&*input.product.borrow()).unwrap() * self.mult {
+                to_satisfy -= 1;
+            }
+        }
+
+        if to_satisfy == 0 {
+            for output in self.recipe.borrow().outputs.clone() {
+                let existing = self.buffers.get_mut(&*output.product.borrow()).unwrap();
+                if existing.current + output.amount * self.mult <= existing.max {
+                    existing.current += output.amount * self.mult;
+                } else {
+                    return false
+                }
+            }
+
+            for input in self.recipe.borrow().inputs.clone() {
+                let buffered = self.buffers.get_mut(&*input.product.borrow()).unwrap();
+                buffered.current -= input.amount * self.mult;
+            }
+
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct InputStreams {
-    inner: Vec<Rc<RefCell<Stream>>>
+    inner: Vec<(Rc<RefCell<Product>>, Rc<RefCell<Stream>>)>
 }
 
 impl InputStreams {
     pub const NONE: Self = Self { inner: vec![] };
 }
 
-impl From<Vec<Rc<RefCell<Stream>>>> for InputStreams {
-    fn from(value: Vec<Rc<RefCell<Stream>>>) -> Self {
+impl From<Vec<(Rc<RefCell<Product>>, Rc<RefCell<Stream>>)>> for InputStreams {
+    fn from(value: Vec<(Rc<RefCell<Product>>, Rc<RefCell<Stream>>)>) -> Self {
         Self { inner: value }
     }
 }
@@ -109,7 +170,7 @@ impl From<Vec<Rc<RefCell<Stream>>>> for InputStreams {
 impl InputStreams {
     pub fn rate_of(&self, product: &Product) -> Rate {
         self.inner.iter().filter_map(|s| {
-            s.borrow().rate_of(product)
+            s.1.borrow().rate_of(product)
         }).sum()
     }
 }
@@ -165,6 +226,22 @@ impl Recipe {
             None
         } else {
             Some(outflow)
+        }
+    }
+
+    pub fn required_of(&self, product: &Product) -> Option<usize> {
+        let amount = self.inputs.iter().filter_map(|i| {
+            if &*i.product.borrow() == product {
+                Some(i.amount)
+            } else {
+                None
+            }
+        }).sum();
+
+        if amount == 0 {
+            None
+        } else {
+            Some(amount)
         }
     }
 }

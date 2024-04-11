@@ -1,6 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
+use std::{cell::RefCell, cmp::Ordering, collections::HashMap, fmt::Display, rc::Rc};
 
 use crate::{lang::parser::{Expr, InfixOp, Literal}, rate::Rate, Buffer, Product, Recipe, RecipePart, Stream};
+
+pub const DEFAULT_BUF_MULT: usize = 8;
 
 #[derive(Clone, Debug)]
 pub struct Factory {
@@ -32,13 +34,12 @@ pub struct Method {
     pub name: String,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum FactoryError {
-    Glorp,
-    Gleep,
-    Exists,
+    UnexpectedEof,
+    TypeError,
+    Exists(String),
     InvalidArguments,
-    ItemNotFound,
 }
 
 impl Display for Value {
@@ -90,20 +91,20 @@ impl Factory {
                     if let Some(optimal) = stream.borrow().recipe.borrow().optimal_inflow_of(product) {
                         let optimal = optimal * stream.borrow().mult;
 
-                        if let Some(rate) = input.borrow().recipe.borrow().optimal_outflow_of(product) {
-                            let rate = rate * input.borrow().mult;
+                        if let Some(rate) = input.1.borrow().recipe.borrow().optimal_outflow_of(product) {
+                            let rate = rate * input.1.borrow().mult;
 
                             if rate < optimal {
                                 let efficiency = rate / optimal;
                                 let mult = 1.0 / efficiency;
-                                let new_mult = input.borrow().mult as f64 * mult;
-                                changes.push((input.clone(), (new_mult - f64::EPSILON).ceil() as usize));
+                                let new_mult = input.1.borrow().mult as f64 * mult;
+                                changes.push((input.1.clone(), (new_mult - f64::EPSILON).ceil() as usize));
                             }
                         }
                         
-                        if let Some(rate) = input.borrow().rate_of(product) {
+                        if let Some(rate) = input.1.borrow().rate_of(product) {
                             if rate < optimal {
-                                self.solve(input.clone());
+                                self.solve(input.1.clone());
                             }
                         }
                     }
@@ -112,12 +113,29 @@ impl Factory {
         }
 
         for (stream, mult) in changes {
+            let old_mult = stream.borrow().mult;
+            let mult_mult = mult / old_mult;
+
+            for (_, buf) in stream.borrow_mut().buffers.iter_mut() {
+                buf.max *= mult_mult;
+            }
+
             stream.borrow_mut().mult = mult;
+
             self.solve(stream.clone());
         }
     }
 
-    pub fn add_mod(&mut self, ast: Vec<Expr>) -> Result<(), FactoryError> {
+    pub fn add_mod(&mut self, mut ast: Vec<Expr>) -> Result<(), FactoryError> {
+        ast.sort_unstable_by(|lhs, rhs| {
+            match (lhs, rhs) {
+                (Expr::Product { .. }, Expr::Product { .. }) => Ordering::Equal,
+                (Expr::Product { .. }, _) => Ordering::Less,
+                (_, Expr::Product { .. }) => Ordering::Greater,
+                (_, _) => Ordering::Equal,
+            }
+        });
+        
         for expr in ast {
             self.process_expr(expr, "base")?;
         }
@@ -176,7 +194,7 @@ impl Factory {
                     if let Some(value) = self.process_expr(expr, module)? {
                         args_out.push(value);
                     } else {
-                        return Err(FactoryError::Glorp)
+                        return Err(FactoryError::UnexpectedEof)
                     }
                 }
 
@@ -245,7 +263,7 @@ impl Factory {
 
             Ok(())
         } else {
-            Err(FactoryError::Exists)
+            Err(FactoryError::Exists(name.to_owned()))
         }
     }
 
@@ -265,7 +283,7 @@ impl Factory {
 
             Ok(())
         } else {
-            Err(FactoryError::Exists)
+            Err(FactoryError::Exists(name.to_owned()))
         }
     }
 
@@ -277,7 +295,7 @@ impl Factory {
 
             Ok(())
         } else {
-            Err(FactoryError::Exists)
+            Err(FactoryError::Exists(name.to_owned()))
         }
     }
 
@@ -298,12 +316,12 @@ impl Factory {
                 let recipe_part = match value {
                     Value::RecipePart(recipe_part) => recipe_part,
                     Value::Product(_, product) => RecipePart { product, amount: 1 },
-                    _ => return Err(FactoryError::Gleep),
+                    _ => return Err(FactoryError::TypeError),
                 };
 
                 parts.push(recipe_part);
             } else {
-                return Err(FactoryError::Glorp)
+                return Err(FactoryError::UnexpectedEof)
             }
         }
 
@@ -314,10 +332,10 @@ impl Factory {
         if let Some(value) = self.process_expr(expr, module)? {
             match value {
                 Value::Int(out) => Ok(out as usize),
-                _ => Err(FactoryError::Gleep)
+                _ => Err(FactoryError::TypeError)
             }
         } else {
-            Err(FactoryError::Glorp)
+            Err(FactoryError::UnexpectedEof)
         }
     }
 
@@ -330,36 +348,42 @@ impl Factory {
                 Value::MultRecipe(call, mult) => {
                     self.parse_call(*call).inspect(|stream| stream.borrow_mut().mult = mult)
                 },
-                _ => Err(FactoryError::Gleep)
+                _ => Err(FactoryError::TypeError)
             }
         } else {
-            Err(FactoryError::Glorp)
+            Err(FactoryError::UnexpectedEof)
         }
     }
 
     fn parse_call(&mut self, call: Value) -> Result<Rc<RefCell<Stream>>, FactoryError> {
         let Value::Call(lhs, rhs) = call else {
-            return Err(FactoryError::Gleep);
+            return Err(FactoryError::TypeError);
         };
 
         let Value::Recipe(_, recipe) = *lhs else {
-            return Err(FactoryError::Gleep)
+            return Err(FactoryError::TypeError)
         };
 
         let mut inputs = Vec::with_capacity(rhs.len());
 
-        for value in rhs {
+        if rhs.len() != recipe.borrow().inputs.len() {
+            return Err(FactoryError::InvalidArguments);
+        }
+
+        for (idx, value) in rhs.into_iter().enumerate() {
+            let product = recipe.borrow().inputs[idx].product.clone();
+
             match value {
-                Value::Stream(_, stream) => inputs.push(stream),
+                Value::Stream(_, stream) => inputs.push((product, stream)),
                 Value::Call(..) => {
-                    inputs.push(self.parse_call(value)?);
+                    inputs.push((product, self.parse_call(value)?));
                 },
                 Value::MultRecipe(call, mult) => {
-                    inputs.push(self.parse_call(*call).inspect(|stream| stream.borrow_mut().mult = mult)?);
+                    inputs.push((product, self.parse_call(*call).inspect(|stream| stream.borrow_mut().mult = mult)?));
                 },
                 _ => {
                     println!("{value}");
-                    return Err(FactoryError::Gleep)
+                    return Err(FactoryError::TypeError)
                 },
             }
         }
@@ -368,10 +392,11 @@ impl Factory {
 
         for output in &recipe.borrow().outputs {
             let product = output.product.borrow().clone();
-            buffer.insert(product, Buffer::ZERO);
+            buffer.insert(product, Buffer { current: 0, max: output.amount * DEFAULT_BUF_MULT});
         }
 
-        Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffer, next: None })))
+        let ticks = recipe.borrow().rate.ticks as usize;
+        Ok(Rc::new(RefCell::new(Stream { mult: 1, recipe: recipe.clone(), inputs: inputs.into(), buffers: buffer, next: None, ticks })))
     }
 
     pub fn call(&mut self, method: Method, args: Vec<Value>) -> Result<Option<Value>, FactoryError> {
@@ -380,7 +405,7 @@ impl Factory {
                 match name.as_ref() {
                     "buffer" => match args.as_slice() {
                         &[Value::Product(_, ref product), Value::Int(buffer)] => {
-                            stream.borrow_mut().buffer.get_mut(&product.borrow()).unwrap().max = buffer as usize;
+                            stream.borrow_mut().buffers.get_mut(&product.borrow()).unwrap().max = buffer as usize;
                             Ok(None)
                         },
                         _ => Err(FactoryError::InvalidArguments)
@@ -429,8 +454,65 @@ impl Factory {
 
     pub fn tick(&mut self, ticks: usize) {
         for stream in self.streams.values() {
+            let mut ticks = ticks;
+            let mut cycles = 0;
+            let reset = stream.borrow().recipe.borrow().rate.ticks as usize;
+            let mut next = stream.borrow().next.unwrap_or(reset);
+
+            while ticks > 0 {
+                if ticks > reset {
+                    cycles += ticks / reset;
+                    ticks = ticks % reset;
+                } else if ticks >= next {
+                    ticks -= next;
+                    cycles += 1;
+                } else {
+                    next -= ticks;
+                    ticks = 0;
+                }
+            }
+
+            stream.borrow_mut().next = Some(next);
+
+            let mut produced: Vec<RecipePart> = stream.borrow().recipe.borrow().outputs.clone().iter().map(|output| RecipePart { product: output.product.clone(), amount: 0 }).collect();
+
+            for _ in 0..cycles {
+                let inputs = stream.borrow().inputs.clone();
+
+                for (product, input) in inputs.inner {
+                    if let Some(buffer) = input.borrow_mut().buffers.get_mut(&*product.borrow()) {
+                        let mut own_buffer = stream.borrow().buffers.get(&*product.borrow()).cloned().unwrap_or_else(|| {
+                            let max = stream.borrow().recipe.borrow().required_of(&*product.borrow()).unwrap() * DEFAULT_BUF_MULT * stream.borrow().mult;
+
+                            Buffer { current: 0, max }
+                        });
+
+                        own_buffer.fill_from(buffer);
+                        stream.borrow_mut().buffers.insert(*&*product.borrow(), own_buffer);
+                    }
+                }
+
+                if stream.borrow_mut().try_produce() {
+                    for (idx, output) in stream.borrow().recipe.borrow().outputs.iter().enumerate() {
+                        if produced[idx].product == output.product {
+                            produced[idx].amount += output.amount;
+                        } else {
+                            produced.iter_mut().find(|produced| produced.product == output.product).unwrap().amount += output.amount;
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
             
+            for output in produced {
+                if output.amount > 0 {
+                    println!("Produced {} x{} ({})", self.product_names.get(&*output.product.borrow()).unwrap(), output.amount * stream.borrow().mult, stream.borrow().buffers.get(&*output.product.borrow()).unwrap());
+                }
+            }
         }
+
+        println!();
     }
 }
 
