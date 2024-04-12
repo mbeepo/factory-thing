@@ -10,6 +10,7 @@ pub struct Factory {
     pub product_names: HashMap<Product, String>,
     pub recipes: HashMap<String, Rc<RefCell<Recipe>>>,
     pub streams: HashMap<String, Rc<RefCell<Stream>>>,
+    pub knowledge: HashMap<String, Rc<RefCell<Knowledge>>>,
     pub modules: HashMap<String, usize>,
 }
 
@@ -18,6 +19,7 @@ pub enum Value {
     Product(String, Rc<RefCell<Product>>),
     Recipe(String, Rc<RefCell<Recipe>>),
     Stream(String, Rc<RefCell<Stream>>),
+    Knowledge(String, Rc<RefCell<Knowledge>>, usize),
     RecipePart(RecipePart),
     Call(Box<Value>, Vec<Value>),
     MultRecipe(Box<Value>, usize),
@@ -32,6 +34,12 @@ pub enum Value {
 pub struct Method {
     pub object: Value,
     pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Knowledge {
+    pub progress: Buffer,
+    pub recipes: Vec<Rc<RefCell<Recipe>>>,   
 }
 
 #[derive(Clone, Debug)]
@@ -65,9 +73,10 @@ impl Factory {
         let product_names = HashMap::new();
         let recipes = HashMap::new();
         let streams = HashMap::new();
+        let knowledge = HashMap::new();
         let mut modules = HashMap::new();
 
-        products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: 0, module: 0 })));
+        products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: 0, module: 0, feed_ticks: 0 })));
         modules.insert("factory".to_owned(), 0);
 
         Self {
@@ -75,6 +84,7 @@ impl Factory {
             product_names,
             recipes,
             streams,
+            knowledge,
             modules,
         }
     }
@@ -127,7 +137,7 @@ impl Factory {
     }
 
     pub fn add_mod(&mut self, mut ast: Vec<Expr>) -> Result<(), FactoryError> {
-        ast.sort_unstable_by(|lhs, rhs| {
+        ast.sort_by(|lhs, rhs| {
             match (lhs, rhs) {
                 (Expr::Product { .. }, Expr::Product { .. }) => Ordering::Equal,
                 (Expr::Product { .. }, _) => Ordering::Less,
@@ -228,6 +238,12 @@ impl Factory {
 
                 Ok(Some(lhs.access(&rhs)))
             },
+            Expr::Knowledge { name, inputs, outputs, period, threshold } => {
+                self.register_recipe(&name, inputs, outputs.clone(), *period, module)?;
+                self.register_knowledge(&name, outputs, *threshold, module)?;
+
+                Ok(None)
+            }
             _ => todo!("{:?}", expr),
         }
     }
@@ -247,6 +263,10 @@ impl Factory {
                 Value::MultRecipe(recipe, mult * mult2 as usize)
             },
             (Value::Int(lhs), InfixOp::Mul, Value::Int(rhs)) => Value::Int(lhs * rhs),
+            (Value::Knowledge(name, knowledge, old_mult), InfixOp::Mul, Value::Int(mult))
+            | (Value::Int(mult), InfixOp::Mul, Value::Knowledge(name, knowledge, old_mult)) => {
+                Value::Knowledge(name, knowledge, old_mult * mult as usize)
+            },
             (lhs, op, rhs) => panic!("Invalid operation: `{lhs:?} {op:?} {rhs:?}`"),
         }
     }
@@ -255,9 +275,9 @@ impl Factory {
         if self.products.get(name).is_none() {
             let module_id = self.get_module(module);
             let product_id = self.products.get("__next").map(|i| i.borrow().id).unwrap_or(0);
-            let product = Product { id: product_id, module: module_id };
+            let product = Product { id: product_id, module: module_id, feed_ticks: 0 };
 
-            self.products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: product_id + 1, module: 0 })));
+            self.products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: product_id + 1, module: 0, feed_ticks: 0 })));
             self.products.insert(name.to_owned(), Rc::new(RefCell::new(product)));
             self.product_names.insert(product, name.to_owned());
 
@@ -269,14 +289,20 @@ impl Factory {
 
     fn register_recipe(&mut self, name: &str, inputs: Vec<Expr>, outputs: Vec<Expr>, period: Expr, module: &str) -> Result<(), FactoryError> {
         if self.recipes.get(name).is_none() {
-            let inputs = self.parts_from_exprs(inputs, module)?;
-            let outputs = self.parts_from_exprs(outputs, module)?;
+            let (inputs, knowledge) = self.parts_from_exprs(inputs.clone(), module)?;
+
+            if knowledge.len() > 0 {
+                return Err(FactoryError::TypeError);
+            }
+
+            let (outputs, knowledge) = self.parts_from_exprs(outputs, module)?;
             let period = self.usize_from_expr(period, module)?;
             let rate = Rate { amount: 1, ticks: period as f64 };
             let recipe = Recipe {
                 rate,
                 inputs,
                 outputs,
+                knowledge,
             };
 
             self.recipes.insert(name.to_owned(), Rc::new(RefCell::new(recipe)));
@@ -299,6 +325,12 @@ impl Factory {
         }
     }
 
+    fn register_knowledge(&mut self, name: &str, outputs: Vec<Expr>, threshold: Expr, module: &str) -> Result<(), FactoryError> {
+
+        
+        Ok(())
+    }
+
     fn get_module(&mut self, name: &str) -> usize {
         let Some(&id) = self.modules.get(name) else {
             let id = *self.modules.get("__next").unwrap_or(&1);
@@ -309,23 +341,23 @@ impl Factory {
         id
     }
 
-    fn parts_from_exprs(&mut self, exprs: Vec<Expr>, module: &str) -> Result<Vec<RecipePart>, FactoryError> {
+    fn parts_from_exprs(&mut self, exprs: Vec<Expr>, module: &str) -> Result<(Vec<RecipePart>, Vec<(Rc<RefCell<Knowledge>>, usize)>), FactoryError> {
         let mut parts = Vec::with_capacity(exprs.len());
+        let mut knowledge = Vec::with_capacity(4);
         for expr in exprs {
             if let Some(value) = self.process_expr(expr, module)? {
-                let recipe_part = match value {
-                    Value::RecipePart(recipe_part) => recipe_part,
-                    Value::Product(_, product) => RecipePart { product, amount: 1 },
+                match value {
+                    Value::RecipePart(recipe_part) => parts.push(recipe_part),
+                    Value::Product(_, product) => parts.push(RecipePart { product, amount: 1 }),
+                    Value::Knowledge(_, silly, mult) => knowledge.push((silly, mult)),
                     _ => return Err(FactoryError::TypeError),
-                };
-
-                parts.push(recipe_part);
+                }
             } else {
                 return Err(FactoryError::UnexpectedEof)
             }
         }
 
-        Ok(parts)
+        Ok((parts, knowledge))
     }
 
     fn usize_from_expr(&mut self, expr: Expr, module: &str) -> Result<usize, FactoryError> {
@@ -353,6 +385,21 @@ impl Factory {
         } else {
             Err(FactoryError::UnexpectedEof)
         }
+    }
+
+    fn rate_from_food(&mut self, foods: Vec<Expr>, module: &str) -> Result<Rate, FactoryError> {
+        let mut ticks = 0;
+        
+        for food in foods {
+            if let Some(value) = self.process_expr(food, module)? {
+                ticks += match value {
+                    Value::Product(name, product) => product.borrow().feed_ticks,
+                    _ => return Err(FactoryError::TypeError),
+                }
+            }
+        }
+
+        Ok(Rate::UNIT)
     }
 
     fn parse_call(&mut self, call: Value) -> Result<Rc<RefCell<Stream>>, FactoryError> {

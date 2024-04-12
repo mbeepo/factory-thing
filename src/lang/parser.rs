@@ -100,6 +100,8 @@ pub enum Expr {
     // <name>(<args>)
     Call { lhs: Box<Expr>, args: Vec<Expr> },   
     Access { lhs: Box<Expr>, rhs: String },
+    Knowledge { name: String, inputs: Vec<Expr>, outputs: Vec<Expr>, period: Box<Expr>, threshold: Box<Expr> },
+    Food { name: String, ticks: Box<Expr> },
 }
 
 pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
@@ -144,16 +146,20 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
         .boxed();
     
     let products = expr.clone().separated_by(just(Token::Ctrl(',')));
-    let recipe = just(Token::Keyword("recipe".to_owned()))
-        .ignore_then(ident)
-        .then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
+    let recipe_body = ident.then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
         .then_ignore(just(Token::Output))
         .then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))).or(products.clone()))
         .then_ignore(just(Token::InfixOp("/".to_owned())))
         .then(expr.clone())
-        .boxed()
+        .boxed();
+    let recipe = just(Token::Keyword("recipe".to_owned())).ignore_then(recipe_body.clone())
         .map(|(((name, inputs), outputs), period)| {
             Expr::Recipe { name, inputs, outputs, period: Box::new(period) }
+        });
+    let knowledge = just(Token::Keyword("knowledge".to_owned())).ignore_then(expr.clone().delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']'))))
+        .then(recipe_body)
+        .map(|(threshold, (((name, inputs), outputs), period))| {
+            Expr::Knowledge { name, inputs, outputs, period: Box::new(period), threshold: Box::new(threshold) }
         });
 
     let assign = just(Token::Keyword("let".to_owned()))
@@ -164,5 +170,5 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
             Expr::Assign { name, rhs: Box::new(rhs) }
         });
 
-    choice((product, recipe, assign, expr)).then_ignore(just(Token::Ctrl(';'))).repeated().at_least(1)
+    choice((product, recipe, assign, expr, knowledge)).then_ignore(just(Token::Ctrl(';'))).repeated().at_least(1)
 }

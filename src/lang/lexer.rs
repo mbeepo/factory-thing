@@ -77,7 +77,9 @@ pub fn lexer() -> impl Parser<char, Vec<Token>, Error = error::Simple<char>> {
         | "producer"
         | "machine"
         | "recipe"
-        | "product" => Token::Keyword(ident),
+        | "product"
+        | "knowledge"
+        | "food" => Token::Keyword(ident),
         "true" => Token::True,
         "false" => Token::False,
         _ => Token::Ident(ident),

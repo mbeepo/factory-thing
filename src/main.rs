@@ -1,6 +1,7 @@
 use std::{cell::RefCell, cmp::Ordering, collections::HashMap, fmt::Display, fs::{read_dir, read_to_string}, path::Path, rc::Rc, thread::sleep, time::Duration};
 
 use chumsky::Parser;
+use factory::Knowledge;
 use lang::parser::Expr;
 
 use crate::{factory::Factory, rate::Rate};
@@ -118,7 +119,8 @@ impl Stream {
             None
         }
     }
-
+    
+    // before calling this, available products should be moved from output buffers into this stream's input buffers
     pub fn try_produce(&mut self) -> bool {
         let mut to_satisfy = self.recipe.borrow().inputs.len();
 
@@ -131,13 +133,17 @@ impl Stream {
         }
 
         if to_satisfy == 0 {
-            for output in self.recipe.borrow().outputs.clone() {
+            for output in &self.recipe.borrow().outputs {
                 let existing = self.buffers.get_mut(&*output.product.borrow()).unwrap();
-                if existing.current + output.amount * self.mult <= existing.max {
+                if output.amount * self.mult <= existing.space_left() {
                     existing.current += output.amount * self.mult;
                 } else {
                     return false
                 }
+            }
+
+            for (knowledge, amount) in &self.recipe.borrow().knowledge {
+                knowledge.borrow_mut().progress.current += amount;
             }
 
             for input in self.recipe.borrow().inputs.clone() {
@@ -181,6 +187,7 @@ pub type Efficiency = f64;
 pub struct Product {
     pub id: usize,
     pub module: usize,
+    pub feed_ticks: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,6 +201,7 @@ pub struct Recipe {
     pub rate: Rate,
     pub inputs: Vec<RecipePart>,
     pub outputs: Vec<RecipePart>,
+    pub knowledge: Vec<(Rc<RefCell<Knowledge>>, usize)>,
 }
 
 impl Recipe {

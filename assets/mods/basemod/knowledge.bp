@@ -1,0 +1,6 @@
+knowledge CrudeElectronics(
+    CopperWire,
+    BasePlate,
+    ElectronicCircuit,
+) -> ;
+
