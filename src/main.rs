@@ -40,7 +40,7 @@ fn main() {
 
     loop {
         sleep(dur);
-        factory.tick(250);
+        factory.tick(1000);
     }
 }
 
@@ -64,11 +64,19 @@ impl Buffer {
     }
 
     pub fn fill_from(&mut self, other: &mut Buffer) {
-        if self.space_left() >= other.current {
+        if other.current < self.space_left() {
             self.current += other.current;
             other.current = 0;
         } else {
             other.current -= self.space_left();
+            self.current = self.max;
+        }
+    }
+
+    pub fn fill_by(&mut self, amount: usize) {
+        if amount < self.space_left() {
+            self.current += amount;
+        } else {
             self.current = self.max;
         }
     }
@@ -143,7 +151,9 @@ impl Stream {
             }
 
             for (knowledge, amount) in &self.recipe.borrow().knowledge {
-                knowledge.borrow_mut().progress.current += amount;
+                if knowledge.borrow().unlockable() {
+                    knowledge.borrow_mut().progress_by(amount * self.mult);
+                }
             }
 
             for input in self.recipe.borrow().inputs.clone() {
@@ -202,6 +212,7 @@ pub struct Recipe {
     pub inputs: Vec<RecipePart>,
     pub outputs: Vec<RecipePart>,
     pub knowledge: Vec<(Rc<RefCell<Knowledge>>, usize)>,
+    pub unlocked: bool,
 }
 
 impl Recipe {

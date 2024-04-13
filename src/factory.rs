@@ -11,7 +11,9 @@ pub struct Factory {
     pub recipes: HashMap<String, Rc<RefCell<Recipe>>>,
     pub streams: HashMap<String, Rc<RefCell<Stream>>>,
     pub knowledge: HashMap<String, Rc<RefCell<Knowledge>>>,
+    pub unresolved: Vec<String>,
     pub modules: HashMap<String, usize>,
+    tick: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -24,10 +26,20 @@ pub enum Value {
     Call(Box<Value>, Vec<Value>),
     MultRecipe(Box<Value>, usize),
     Method(Box<Method>),
+    Attribute(Box<Attribute>),
     Int(isize),
     Float(f64),
     String(String),
-    Bool(bool)
+    Bool(bool),
+    List(Vec<Value>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Object {
+    Product,
+    Recipe,
+    Stream,
+    Knowledge,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,9 +49,36 @@ pub struct Method {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Attribute {
+    pub object: Value,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Knowledge {
+    pub name: String,
     pub progress: Buffer,
-    pub recipes: Vec<Rc<RefCell<Recipe>>>,   
+    pub recipes: Vec<Rc<RefCell<Recipe>>>,
+    pub dependencies: Vec<Rc<RefCell<Knowledge>>>,
+    pub unlocked: bool,
+}
+
+impl Knowledge {
+    pub fn unlockable(&self) -> bool {
+        self.dependencies.iter().all(|dep| dep.borrow().unlocked)
+    }
+
+    pub fn progress_by(&mut self, amount: usize) {
+        if self.unlocked { return }
+        self.progress.fill_by(amount);
+        if self.progress.space_left() == 0 {
+            self.unlocked = true;
+
+            for recipe in &self.recipes {
+                recipe.borrow_mut().unlocked = true;
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +99,7 @@ impl Display for Value {
                 let rhs = rhs.iter().fold(String::new(), |acc, e| format!("{acc}, {e}"));
                 format!("Call {{ {lhs}({}) }}", rhs)
             },
+            Self::Knowledge(name, _, _) => format!("Knowledge {{ {name} }}"),
             e => format!("{:?}", e),
         };
 
@@ -74,6 +114,7 @@ impl Factory {
         let recipes = HashMap::new();
         let streams = HashMap::new();
         let knowledge = HashMap::new();
+        let unresolved = Vec::with_capacity(4);
         let mut modules = HashMap::new();
 
         products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: 0, module: 0, feed_ticks: 0 })));
@@ -85,7 +126,9 @@ impl Factory {
             recipes,
             streams,
             knowledge,
+            unresolved,
             modules,
+            tick: 0,
         }
     }
 
@@ -142,6 +185,9 @@ impl Factory {
                 (Expr::Product { .. }, Expr::Product { .. }) => Ordering::Equal,
                 (Expr::Product { .. }, _) => Ordering::Less,
                 (_, Expr::Product { .. }) => Ordering::Greater,
+                (Expr::Knowledge { .. }, Expr::Knowledge { .. }) => Ordering::Equal,
+                (Expr::Knowledge { .. }, _) => Ordering::Less,
+                (_, Expr::Knowledge { .. }) => Ordering::Greater,
                 (_, _) => Ordering::Equal,
             }
         });
@@ -178,6 +224,7 @@ impl Factory {
                 Ok(None)
             },
             Expr::Recipe { name, inputs, outputs, period } => {
+                println!("{}", name);
                 self.register_recipe(&name, inputs, outputs, *period, module)?;
                 Ok(None)
             },
@@ -192,8 +239,10 @@ impl Factory {
                     Ok(Some(Value::Recipe(ident, recipe.clone())))
                 } else if let Some(product) = self.products.get(&ident) {
                     Ok(Some(Value::Product(ident, product.clone())))
+                } else if let Some(knowledge) = self.knowledge.get(&ident) {
+                    Ok(Some(Value::Knowledge(ident, knowledge.clone(), 1)))  
                 } else {
-                    panic!("Undefined identifier: {ident}");
+                    panic!("Unknown identifier: {ident}");
                 }
             },
             Expr::Call { lhs, args } => {
@@ -238,11 +287,21 @@ impl Factory {
 
                 Ok(Some(lhs.access(&rhs)))
             },
-            Expr::Knowledge { name, inputs, outputs, period, threshold } => {
-                self.register_recipe(&name, inputs, outputs.clone(), *period, module)?;
-                self.register_knowledge(&name, outputs, *threshold, module)?;
+            Expr::Knowledge { name, outputs } => {
+                self.register_knowledge(&name, outputs, module)?;
 
                 Ok(None)
+            },
+            Expr::List { contents } => {
+                let mut exprs = Vec::with_capacity(contents.len());
+                
+                for expr in contents {
+                    if let Some(expr) = self.process_expr(expr, module)? {
+                        exprs.push(expr);
+                    }
+                }
+
+                Ok(Some(Value::List(exprs)))
             }
             _ => todo!("{:?}", expr),
         }
@@ -267,12 +326,37 @@ impl Factory {
             | (Value::Int(mult), InfixOp::Mul, Value::Knowledge(name, knowledge, old_mult)) => {
                 Value::Knowledge(name, knowledge, old_mult * mult as usize)
             },
+            (Value::Attribute(attribute), InfixOp::Assign, _) => {
+                match (attribute.object, rhs) {
+                    (Value::Knowledge(_, knowledge, _), Value::Int(rhs)) => {
+                        match attribute.name.as_str() {
+                            "threshold" => knowledge.borrow_mut().progress.max = rhs as usize,
+                            _ => unimplemented!()
+                        }
+                    },
+                    (Value::Knowledge(_, knowledge, _), Value::List(exprs)) => {
+                        match attribute.name.as_str() {
+                            "deps" => knowledge.borrow_mut().dependencies = exprs.into_iter().filter_map(|expr| {
+                                if let Value::Knowledge(_, knowledge, _) = expr {
+                                    Some(knowledge)
+                                } else {
+                                    None
+                                }
+                            }).collect(),
+                            _ => unimplemented!()
+                        }
+                    }
+                    _ => unimplemented!(),
+                }
+
+                lhs
+            }
             (lhs, op, rhs) => panic!("Invalid operation: `{lhs:?} {op:?} {rhs:?}`"),
         }
     }
 
     fn register_product(&mut self, name: &str, module: &str) -> Result<(), FactoryError> {
-        if self.products.get(name).is_none() {
+        if self.products.get(name).is_none() || self.unresolved.contains(&name.to_owned()) {
             let module_id = self.get_module(module);
             let product_id = self.products.get("__next").map(|i| i.borrow().id).unwrap_or(0);
             let product = Product { id: product_id, module: module_id, feed_ticks: 0 };
@@ -288,7 +372,7 @@ impl Factory {
     }
 
     fn register_recipe(&mut self, name: &str, inputs: Vec<Expr>, outputs: Vec<Expr>, period: Expr, module: &str) -> Result<(), FactoryError> {
-        if self.recipes.get(name).is_none() {
+        if self.recipes.get(name).is_none() || self.unresolved.contains(&name.to_owned()) {
             let (inputs, knowledge) = self.parts_from_exprs(inputs.clone(), module)?;
 
             if knowledge.len() > 0 {
@@ -298,14 +382,26 @@ impl Factory {
             let (outputs, knowledge) = self.parts_from_exprs(outputs, module)?;
             let period = self.usize_from_expr(period, module)?;
             let rate = Rate { amount: 1, ticks: period as f64 };
-            let recipe = Recipe {
-                rate,
-                inputs,
-                outputs,
-                knowledge,
-            };
 
-            self.recipes.insert(name.to_owned(), Rc::new(RefCell::new(recipe)));
+            if let Some(r) = self.recipes.get_mut(name) {
+                let recipe = &mut *r.borrow_mut();
+                recipe.rate = rate;
+                recipe.inputs = inputs;
+                recipe.outputs = outputs;
+                recipe.knowledge = knowledge;
+
+
+            } else {
+                let recipe = Recipe {
+                    rate,
+                    inputs,
+                    outputs,
+                    knowledge,
+                    unlocked: true,
+                };
+    
+                self.recipes.insert(name.to_owned(), Rc::new(RefCell::new(recipe)));    
+            }
 
             Ok(())
         } else {
@@ -325,8 +421,30 @@ impl Factory {
         }
     }
 
-    fn register_knowledge(&mut self, name: &str, outputs: Vec<Expr>, threshold: Expr, module: &str) -> Result<(), FactoryError> {
+    fn register_knowledge(&mut self, name: &str, outputs: Vec<String>, module: &str) -> Result<(), FactoryError> {
+        if self.knowledge.get(name).is_none() {
+            let recipes = outputs.into_iter().map(|recipe_name| if let Some(recipe) = self.recipes.get(&recipe_name) {
+                recipe.clone()
+            } else {
+                self.unresolved.push(recipe_name.to_owned()); 
+                let recipe = Recipe {
+                    rate: Rate::ZERO,
+                    inputs: Vec::new(),
+                    outputs: Vec::new(),
+                    knowledge: Vec::new(),
+                    unlocked: false,
+                };
+                let recipe = Rc::new(RefCell::new(recipe));
 
+                self.recipes.insert(recipe_name, recipe.clone());
+                recipe
+            }).collect();
+            let dependencies = Vec::new();
+            let knowledge = Knowledge { name: name.to_owned(), progress: Buffer { current: 0, max: 1 }, recipes, dependencies, unlocked: false };
+            let knowledge = Rc::new(RefCell::new(knowledge));
+
+            self.knowledge.insert(name.to_owned(), knowledge);
+        }
         
         Ok(())
     }
@@ -385,21 +503,6 @@ impl Factory {
         } else {
             Err(FactoryError::UnexpectedEof)
         }
-    }
-
-    fn rate_from_food(&mut self, foods: Vec<Expr>, module: &str) -> Result<Rate, FactoryError> {
-        let mut ticks = 0;
-        
-        for food in foods {
-            if let Some(value) = self.process_expr(food, module)? {
-                ticks += match value {
-                    Value::Product(name, product) => product.borrow().feed_ticks,
-                    _ => return Err(FactoryError::TypeError),
-                }
-            }
-        }
-
-        Ok(Rate::UNIT)
     }
 
     fn parse_call(&mut self, call: Value) -> Result<Rc<RefCell<Stream>>, FactoryError> {
@@ -500,7 +603,20 @@ impl Factory {
     }
 
     pub fn tick(&mut self, ticks: usize) {
+        self.tick += ticks;
+
         for stream in self.streams.values() {
+            {
+                // don't run streams that only output unlocked knowledge with no products
+                let stream = stream.borrow();
+                let recipe = stream.recipe.borrow();
+                if (recipe.knowledge.iter().any(|knowledge| !knowledge.0.borrow().unlockable())
+                    || recipe.knowledge.iter().all(|knowledge| knowledge.0.borrow().unlocked)
+                ) && recipe.outputs.len() == 0 {
+                    continue;
+                }
+            }
+
             let mut ticks = ticks;
             let mut cycles = 0;
             let reset = stream.borrow().recipe.borrow().rate.ticks as usize;
@@ -511,7 +627,9 @@ impl Factory {
                     cycles += ticks / reset;
                     ticks = ticks % reset;
                 } else if ticks >= next {
-                    ticks -= next;
+                    let i = next;
+                    next = reset - (ticks - next);
+                    ticks -= i;
                     cycles += 1;
                 } else {
                     next -= ticks;
@@ -522,6 +640,7 @@ impl Factory {
             stream.borrow_mut().next = Some(next);
 
             let mut produced: Vec<RecipePart> = stream.borrow().recipe.borrow().outputs.clone().iter().map(|output| RecipePart { product: output.product.clone(), amount: 0 }).collect();
+            let mult = stream.borrow().mult;
 
             for _ in 0..cycles {
                 let inputs = stream.borrow().inputs.clone();
@@ -529,7 +648,7 @@ impl Factory {
                 for (product, input) in inputs.inner {
                     if let Some(buffer) = input.borrow_mut().buffers.get_mut(&*product.borrow()) {
                         let mut own_buffer = stream.borrow().buffers.get(&*product.borrow()).cloned().unwrap_or_else(|| {
-                            let max = stream.borrow().recipe.borrow().required_of(&*product.borrow()).unwrap() * DEFAULT_BUF_MULT * stream.borrow().mult;
+                            let max = stream.borrow().recipe.borrow().required_of(&*product.borrow()).unwrap() * DEFAULT_BUF_MULT * mult;
 
                             Buffer { current: 0, max }
                         });
@@ -547,6 +666,11 @@ impl Factory {
                             produced.iter_mut().find(|produced| produced.product == output.product).unwrap().amount += output.amount;
                         }
                     }
+
+                    for (knowledge, amount) in stream.borrow().recipe.borrow().knowledge.iter() {
+                        let knowledge = knowledge.borrow();
+                        println!("[-- Tick {} --] Researched {} x{} ({})", self.tick, knowledge.name, amount * mult, knowledge.progress);
+                    }
                 } else {
                     break;
                 }
@@ -554,7 +678,7 @@ impl Factory {
             
             for output in produced {
                 if output.amount > 0 {
-                    println!("Produced {} x{} ({})", self.product_names.get(&*output.product.borrow()).unwrap(), output.amount * stream.borrow().mult, stream.borrow().buffers.get(&*output.product.borrow()).unwrap());
+                    println!("[-- Tick {} --] Produced {} x{} ({})", self.tick, self.product_names.get(&*output.product.borrow()).unwrap(), output.amount * mult, stream.borrow().buffers.get(&*output.product.borrow()).unwrap());
                 }
             }
         }
@@ -571,6 +695,13 @@ impl Value {
                     "buffer"
                     | "solve"
                     | "log" => Value::Method(Box::new(Method { object: self.clone(), name: rhs.to_owned() })),
+                    _ => unimplemented!(),
+                }
+            }
+            Self::Knowledge(..) => {
+                match rhs {
+                    "threshold"
+                    | "deps" => Value::Attribute(Box::new(Attribute { object: self.clone(), name: rhs.to_owned() })),
                     _ => unimplemented!(),
                 }
             },

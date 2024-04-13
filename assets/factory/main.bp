@@ -1,10 +1,12 @@
-let iron = Iron();
-let copper = Copper();
-let copperWire = CopperWire(copper);
-let electromagnets = Electromagnet(iron, copperWire) * 10;
+let iron        = Iron();
+let wheat       = Wheat();
+let ironPowder  = IronPowder(iron);
+let ironwheat   = Ironwheat(wheat, ironPowder) * 25;
 
-electromagnets.solve();
-electromagnets.buffer(p_electromagnet, 256);
-copperWire.buffer(p_copper_wire, 256);
-copper.buffer(p_copper, 256);
-iron.buffer(p_iron, 256);
+ironwheat.buffer(p_ironwheat, 512);
+ironwheat.solve();
+
+let feeding     = r_CrudeElectronics(ironwheat) * 10;
+let feeding2    = r_Electronics(ironwheat) * 5;
+
+feeding.solve();

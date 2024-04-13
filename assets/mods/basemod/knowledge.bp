@@ -1,6 +1,30 @@
-knowledge CrudeElectronics(
+knowledge k_CrudeElectronics(
     CopperWire,
-    BasePlate,
-    ElectronicCircuit,
-) -> ;
+    CrudeCircuit,
+);
+k_CrudeElectronics.threshold = 10;
 
+product p_copper_wire;
+product p_crude_circuit;
+
+recipe r_CrudeElectronics(p_ironwheat * 5) -> k_CrudeElectronics / 2500ms;
+recipe CopperWire(p_copper) -> p_copper_wire * 2 / 1000ms;
+recipe CrudeCircuit(p_iron, p_copper_wire * 3) -> p_crude_circuit / 1000ms;
+
+knowledge k_Electronics(
+    ElectronicComponents,
+    CircuitBoard,
+    ElectronicCircuit,
+);
+k_Electronics.threshold = 50;
+k_Electronics.deps = [k_CrudeElectronics];
+
+product p_electronic_components;
+product p_circuit_board;
+product p_electronic_circuit;
+product p_phenol;
+
+recipe r_Electronics(p_ironwheat * 20) -> k_Electronics / 10000ms;
+recipe ElectronicComponents(p_copper * 2, p_silicon * 4) -> p_electronic_components * 16 / 1500ms;
+recipe CircuitBoard(p_iron, p_phenol * 300) -> p_circuit_board * 2 / 1500ms;
+recipe ElectronicCircuit(p_electronic_components * 24, p_circuit_board) -> p_electronic_circuit / 2000ms;

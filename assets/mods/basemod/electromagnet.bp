@@ -1,5 +1,3 @@
-product p_copper_wire;
 product p_electromagnet;
 
-recipe CopperWire(p_copper) -> p_copper_wire * 3 / 750ms;
 recipe Electromagnet(p_iron, p_copper_wire * 3) -> p_electromagnet / 500ms;

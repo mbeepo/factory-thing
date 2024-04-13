@@ -36,6 +36,7 @@ pub enum InfixOp {
     Div,
     Add,
     Sub,
+    Assign,
 }
 
 impl Display for InfixOp {
@@ -49,7 +50,8 @@ impl Display for InfixOp {
             Self::Mul => "*",
             Self::Div => "/",
             Self::Add => "+",
-            Self::Sub => "-"
+            Self::Sub => "-",
+            Self::Assign => "=",
         };
 
         write!(f, "{}", content)
@@ -68,6 +70,7 @@ impl From<String> for InfixOp {
             "/"  => Self::Div,
             "+"  => Self::Add,
             "-"  => Self::Sub,
+            "="  => Self::Assign,
             _ => unreachable!("Invalid infix op"),
         }
     }
@@ -99,9 +102,12 @@ pub enum Expr {
     Recipe { name: String, inputs: Vec<Expr>, outputs: Vec<Expr>, period: Box<Expr> },
     // <name>(<args>)
     Call { lhs: Box<Expr>, args: Vec<Expr> },   
+    /// <lhs>.<rhs>
     Access { lhs: Box<Expr>, rhs: String },
-    Knowledge { name: String, inputs: Vec<Expr>, outputs: Vec<Expr>, period: Box<Expr>, threshold: Box<Expr> },
-    Food { name: String, ticks: Box<Expr> },
+    /// knowledge <name>(<outputs>)
+    Knowledge { name: String, outputs: Vec<String> },
+    /// [<contents>]
+    List { contents: Vec<Expr> },
 }
 
 pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
@@ -119,9 +125,10 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
 
         let atom = choice((val, ident.map(Expr::Ident), expr.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))));
         let products = expr.clone().separated_by(just(Token::Ctrl(',')));
-        let access = atom.clone().then_ignore(just(Token::InfixOp(".".to_owned()))).then(ident).map(|(lhs, rhs)| Expr::Access { lhs: Box::new(lhs), rhs });
+        let access = atom.clone().then_ignore(just(Token::InfixOp(".".to_owned()))).then(ident).map(|(lhs, rhs)| { Expr::Access { lhs: Box::new(lhs), rhs }});
         let call = choice((access.clone(), atom.clone())).then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')')))).map(|(lhs, args)| { Expr::Call { lhs: Box::new(lhs), args } });
-        let op_arg = choice((call.clone(), access.clone(), atom.clone()));
+        let list = products.clone().delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']'))).map(|contents| Expr::List { contents });
+        let op_arg = choice((call.clone(), access.clone(), atom.clone(), list.clone()));
 
         let infix = op_arg.clone().then(choice((
             just(Token::InfixOp("*".to_owned()))
@@ -132,12 +139,15 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
                 .to(InfixOp::Add),
             just(Token::InfixOp("-".to_owned()))
                 .labelled("subtract")
-                .to(InfixOp::Sub)
+                .to(InfixOp::Sub),
+            just(Token::InfixOp("=".to_owned()))
+                .labelled("assign")
+                .to(InfixOp::Assign),
         )).then(op_arg.clone()).repeated()).foldl(|lhs, (op, rhs)| {
             Expr::InfixOp { lhs: Box::new(lhs), op, rhs: Box::new(rhs) }
         });
         
-        choice((infix, call, access, atom))
+        choice((infix, call, list, access, atom))
     });
 
     let product = just(Token::Keyword("product".to_owned()))
@@ -146,23 +156,23 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
         .boxed();
     
     let products = expr.clone().separated_by(just(Token::Ctrl(',')));
-    let recipe_body = ident.then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
+    let recipe = just(Token::Keyword("recipe".to_owned())).ignore_then(ident)
+        .then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
         .then_ignore(just(Token::Output))
         .then(products.clone().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))).or(products.clone()))
         .then_ignore(just(Token::InfixOp("/".to_owned())))
         .then(expr.clone())
-        .boxed();
-    let recipe = just(Token::Keyword("recipe".to_owned())).ignore_then(recipe_body.clone())
+        .boxed()
         .map(|(((name, inputs), outputs), period)| {
             Expr::Recipe { name, inputs, outputs, period: Box::new(period) }
         });
-    let knowledge = just(Token::Keyword("knowledge".to_owned())).ignore_then(expr.clone().delimited_by(just(Token::Ctrl('[')), just(Token::Ctrl(']'))))
-        .then(recipe_body)
-        .map(|(threshold, (((name, inputs), outputs), period))| {
-            Expr::Knowledge { name, inputs, outputs, period: Box::new(period), threshold: Box::new(threshold) }
+    let knowledge = just(Token::Keyword("knowledge".to_owned())).ignore_then(ident.clone())
+        .then(ident.separated_by(just(Token::Ctrl(','))).allow_trailing().delimited_by(just(Token::Ctrl('(')), just(Token::Ctrl(')'))))
+        .map(|(name, outputs)| {
+            Expr::Knowledge { name, outputs }
         });
 
-    let assign = just(Token::Keyword("let".to_owned()))
+    let stream = just(Token::Keyword("let".to_owned()))
         .ignore_then(ident)
         .then_ignore(just(Token::InfixOp("=".to_owned())))
         .then(expr.clone())
@@ -170,5 +180,5 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
             Expr::Assign { name, rhs: Box::new(rhs) }
         });
 
-    choice((product, recipe, assign, expr, knowledge)).then_ignore(just(Token::Ctrl(';'))).repeated().at_least(1)
+    choice((product, recipe, stream, expr, knowledge)).then_ignore(just(Token::Ctrl(';'))).repeated().at_least(1)
 }
