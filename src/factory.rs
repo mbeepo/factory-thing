@@ -117,7 +117,7 @@ impl Factory {
         let unresolved = Vec::with_capacity(4);
         let mut modules = HashMap::new();
 
-        products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: 0, module: 0, feed_ticks: 0 })));
+        products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: 0, module: 0 })));
         modules.insert("factory".to_owned(), 0);
 
         Self {
@@ -224,7 +224,6 @@ impl Factory {
                 Ok(None)
             },
             Expr::Recipe { name, inputs, outputs, period } => {
-                println!("{}", name);
                 self.register_recipe(&name, inputs, outputs, *period, module)?;
                 Ok(None)
             },
@@ -359,9 +358,9 @@ impl Factory {
         if self.products.get(name).is_none() || self.unresolved.contains(&name.to_owned()) {
             let module_id = self.get_module(module);
             let product_id = self.products.get("__next").map(|i| i.borrow().id).unwrap_or(0);
-            let product = Product { id: product_id, module: module_id, feed_ticks: 0 };
+            let product = Product { id: product_id, module: module_id };
 
-            self.products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: product_id + 1, module: 0, feed_ticks: 0 })));
+            self.products.insert("__next".to_owned(), Rc::new(RefCell::new(Product { id: product_id + 1, module: 0 })));
             self.products.insert(name.to_owned(), Rc::new(RefCell::new(product)));
             self.product_names.insert(product, name.to_owned());
 
@@ -568,29 +567,40 @@ impl Factory {
                         _ => Err(FactoryError::InvalidArguments)
                     },
                     "log" => {
-                        let outputs = if args.len() == 0 {
-                            stream.borrow().recipe.borrow().outputs.clone()
+                        let (inputs, outputs) = if args.len() == 0 {
+                            (stream.borrow().recipe.borrow().inputs.clone(), stream.borrow().recipe.borrow().outputs.clone())
                         } else {
-                            let mut out = Vec::new();
+                            let mut inputs = Vec::new();
+                            let mut outputs = Vec::new();
 
                             for product in args {
                                 if let Value::Product(_, product) = product {
                                     if let Some(recipe_part) = stream.borrow().recipe.borrow().outputs.iter().find(|e| e.product == product) {
-                                        out.push(recipe_part.clone());
+                                        outputs.push(recipe_part.clone());
+                                    }
+
+                                    if let Some(recipe_part) = stream.borrow().recipe.borrow().inputs.iter().find(|e| e.product == product) {
+                                        inputs.push(recipe_part.clone());
                                     }
                                 }
 
                             }
 
-                            out
+                           (inputs, outputs)
                         };
 
                         println!("----- {stream_name} x{} -----", stream.borrow().mult);
+                        for input in inputs {
+                            let rate = stream.borrow().optimal_inflow_of(&*input.product.borrow()).unwrap();
+                            let name = self.product_names.get(&*input.product.borrow()).unwrap();
+                            println!("  <- {} @ {}", name, rate);
+                        }
+
                         for output in outputs {
                             // if the product isnt in the stream something went wrong so a panic is actually desired
                             let rate = stream.borrow().rate_of(&*output.product.borrow()).unwrap();
                             let name = self.product_names.get(&*output.product.borrow()).unwrap();
-                            println!("  {} @ {}", name, rate);
+                            println!("  -> {} @ {}", name, rate);
                         }
 
                         Ok(None)
@@ -604,23 +614,26 @@ impl Factory {
 
     pub fn tick(&mut self, ticks: usize) {
         self.tick += ticks;
+        println!();
+        println!("[-- Tick {} --]", self.tick);
 
         for stream in self.streams.values() {
             {
-                // don't run streams that only output unlocked knowledge with no products
+                // don't run streams that only output unlocked knowledge with no products, or that would output locked knowledge
                 let stream = stream.borrow();
                 let recipe = stream.recipe.borrow();
-                if (recipe.knowledge.iter().any(|knowledge| !knowledge.0.borrow().unlockable())
+                if ((recipe.knowledge.iter().any(|knowledge| !knowledge.0.borrow().unlockable())
                     || recipe.knowledge.iter().all(|knowledge| knowledge.0.borrow().unlocked)
-                ) && recipe.outputs.len() == 0 {
+                ) && recipe.outputs.len() == 0) || !recipe.unlocked {
                     continue;
                 }
             }
 
             let mut ticks = ticks;
             let mut cycles = 0;
-            let reset = stream.borrow().recipe.borrow().rate.ticks as usize;
+            let reset = stream.borrow().ticks;
             let mut next = stream.borrow().next.unwrap_or(reset);
+            let old_next = next;
 
             while ticks > 0 {
                 if ticks > reset {
@@ -641,6 +654,7 @@ impl Factory {
 
             let mut produced: Vec<RecipePart> = stream.borrow().recipe.borrow().outputs.clone().iter().map(|output| RecipePart { product: output.product.clone(), amount: 0 }).collect();
             let mult = stream.borrow().mult;
+            let mut successful = false;
 
             for _ in 0..cycles {
                 let inputs = stream.borrow().inputs.clone();
@@ -658,7 +672,8 @@ impl Factory {
                     }
                 }
 
-                if stream.borrow_mut().try_produce() {
+                if stream.borrow_mut().try_start_produce() {
+                    successful = true;
                     for (idx, output) in stream.borrow().recipe.borrow().outputs.iter().enumerate() {
                         if produced[idx].product == output.product {
                             produced[idx].amount += output.amount;
@@ -669,21 +684,25 @@ impl Factory {
 
                     for (knowledge, amount) in stream.borrow().recipe.borrow().knowledge.iter() {
                         let knowledge = knowledge.borrow();
-                        println!("[-- Tick {} --] Researched {} x{} ({})", self.tick, knowledge.name, amount * mult, knowledge.progress);
+                        println!("[-- Tick {} --] Learned {} x{} ({})", self.tick, knowledge.name, amount * mult, knowledge.progress);
                     }
                 } else {
                     break;
                 }
             }
             
+
+
             for output in produced {
                 if output.amount > 0 {
-                    println!("[-- Tick {} --] Produced {} x{} ({})", self.tick, self.product_names.get(&*output.product.borrow()).unwrap(), output.amount * mult, stream.borrow().buffers.get(&*output.product.borrow()).unwrap());
+                    println!("[-- Tick {} --] Produced {} x{}", self.tick, self.product_names.get(&*output.product.borrow()).unwrap(), output.amount * mult);
                 }
             }
-        }
 
-        println!();
+            if cycles > 0 && !successful {
+                stream.borrow_mut().next = Some(old_next);
+            }
+        }
     }
 }
 

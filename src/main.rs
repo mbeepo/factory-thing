@@ -41,6 +41,18 @@ fn main() {
     loop {
         sleep(dur);
         factory.tick(1000);
+
+        for (name, stream) in factory.streams.iter() {
+            println!("{name}: (next in {} ticks)", stream.borrow().next.unwrap_or(99999));
+
+            for (product, buffer) in stream.borrow().buffers.iter() {
+                println!("  {}: {buffer}", factory.product_names.get(product).unwrap());
+            }
+        }
+
+        for (name, knowledge) in factory.knowledge.iter() {
+            println!("{name}: {}", knowledge.borrow().progress);
+        }
     }
 }
 
@@ -74,11 +86,7 @@ impl Buffer {
     }
 
     pub fn fill_by(&mut self, amount: usize) {
-        if amount < self.space_left() {
-            self.current += amount;
-        } else {
-            self.current = self.max;
-        }
+        self.current += self.space_left().min(amount);
     }
 }
 
@@ -88,8 +96,9 @@ pub struct Stream {
     pub recipe: Rc<RefCell<Recipe>>,
     pub inputs: InputStreams,
     pub buffers: HashMap<Product, Buffer>,
-    /// How many ticks until next output
+    /// How many ticks until next output if currently producing, or None if waiting for inputs
     pub next: Option<usize>,
+    /// Maximum ticks between outputs
     pub ticks: usize,
 }
 
@@ -114,6 +123,12 @@ impl Stream {
         Some(outflow * eff * self.mult)
     }
 
+    pub fn optimal_inflow_of(&self, product: &Product) -> Option<Rate> {
+        let inflow = self.recipe.borrow().optimal_inflow_of(product)?;
+
+        Some(inflow * self.mult)
+    }
+
     pub fn until_full(&self, product: &Product) -> Option<usize> {
         let buffer = self.buffers.get(product)?;
 
@@ -129,7 +144,7 @@ impl Stream {
     }
     
     // before calling this, available products should be moved from output buffers into this stream's input buffers
-    pub fn try_produce(&mut self) -> bool {
+    pub fn try_start_produce(&mut self) -> bool {
         let mut to_satisfy = self.recipe.borrow().inputs.len();
 
         for input in self.recipe.borrow().inputs.clone() {
@@ -141,27 +156,31 @@ impl Stream {
         }
 
         if to_satisfy == 0 {
-            for output in &self.recipe.borrow().outputs {
-                let existing = self.buffers.get_mut(&*output.product.borrow()).unwrap();
-                if output.amount * self.mult <= existing.space_left() {
+            if self.recipe.borrow().outputs.iter().all(|output| {
+                output.amount * self.mult <= self.buffers.get(&*output.product.borrow()).unwrap().space_left()
+            }) {
+                for output in &self.recipe.borrow().outputs {
+                    let existing = self.buffers.get_mut(&*output.product.borrow()).unwrap();
+    
                     existing.current += output.amount * self.mult;
-                } else {
-                    return false
                 }
-            }
-
-            for (knowledge, amount) in &self.recipe.borrow().knowledge {
-                if knowledge.borrow().unlockable() {
-                    knowledge.borrow_mut().progress_by(amount * self.mult);
+    
+                for (knowledge, amount) in &self.recipe.borrow().knowledge {
+                    if knowledge.borrow().unlockable() {
+                        knowledge.borrow_mut().progress_by(amount * self.mult);
+                    }
                 }
+    
+                for input in self.recipe.borrow().inputs.clone() {
+                    let buffered = self.buffers.get_mut(&*input.product.borrow()).unwrap();
+                    buffered.current -= input.amount * self.mult;
+                }
+    
+                self.next = Some(self.ticks);
+                true
+            } else {
+                false
             }
-
-            for input in self.recipe.borrow().inputs.clone() {
-                let buffered = self.buffers.get_mut(&*input.product.borrow()).unwrap();
-                buffered.current -= input.amount * self.mult;
-            }
-
-            true
         } else {
             false
         }
@@ -197,7 +216,6 @@ pub type Efficiency = f64;
 pub struct Product {
     pub id: usize,
     pub module: usize,
-    pub feed_ticks: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

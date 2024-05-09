@@ -10,3 +10,7 @@ let feeding     = r_CrudeElectronics(ironwheat) * 10;
 let feeding2    = r_Electronics(ironwheat) * 5;
 
 feeding.solve();
+iron.log();
+wheat.log();
+ironPowder.log();
+ironwheat.log();
