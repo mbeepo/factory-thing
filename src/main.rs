@@ -158,19 +158,7 @@ impl Stream {
         if to_satisfy == 0 {
             if self.recipe.borrow().outputs.iter().all(|output| {
                 output.amount * self.mult <= self.buffers.get(&*output.product.borrow()).unwrap().space_left()
-            }) {
-                for output in &self.recipe.borrow().outputs {
-                    let existing = self.buffers.get_mut(&*output.product.borrow()).unwrap();
-    
-                    existing.current += output.amount * self.mult;
-                }
-    
-                for (knowledge, amount) in &self.recipe.borrow().knowledge {
-                    if knowledge.borrow().unlockable() {
-                        knowledge.borrow_mut().progress_by(amount * self.mult);
-                    }
-                }
-    
+            }) {    
                 for input in self.recipe.borrow().inputs.clone() {
                     let buffered = self.buffers.get_mut(&*input.product.borrow()).unwrap();
                     buffered.current -= input.amount * self.mult;

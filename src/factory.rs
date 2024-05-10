@@ -629,6 +629,12 @@ impl Factory {
                 }
             }
 
+            // 1. tick stream if in progress
+            // 2. fill output buffers if stream finishes
+            // 2a. fill input buffers
+            // 2b. start stream again if inputs satisfied
+            // 3. repeat as many times as can fit within <ticks> ticks
+
             let mut ticks = ticks;
             let mut cycles = 0;
             let reset = stream.borrow().ticks;
@@ -657,6 +663,32 @@ impl Factory {
             let mut successful = false;
 
             for _ in 0..cycles {
+                for output in &stream.borrow().recipe.borrow().outputs {
+                    let mut mut_stream = stream.borrow_mut();
+                    let existing = mut_stream.buffers.get_mut(&*output.product.borrow()).unwrap();
+    
+                    existing.current += output.amount * stream.borrow().mult;
+                }
+    
+                for (knowledge, amount) in &stream.borrow().recipe.borrow().knowledge {
+                    if knowledge.borrow().unlockable() {
+                        knowledge.borrow_mut().progress_by(amount * stream.borrow().mult);
+                    }
+                }
+
+                for (idx, output) in stream.borrow().recipe.borrow().outputs.iter().enumerate() {
+                    if produced[idx].product == output.product {
+                        produced[idx].amount += output.amount;
+                    } else {
+                        produced.iter_mut().find(|produced| produced.product == output.product).unwrap().amount += output.amount;
+                    }
+                }
+
+                for (knowledge, amount) in stream.borrow().recipe.borrow().knowledge.iter() {
+                    let knowledge = knowledge.borrow();
+                    println!("[-- Tick {} --] Learned {} x{} ({})", self.tick, knowledge.name, amount * mult, knowledge.progress);
+                }
+
                 let inputs = stream.borrow().inputs.clone();
 
                 for (product, input) in inputs.inner {
@@ -672,35 +704,17 @@ impl Factory {
                     }
                 }
 
-                if stream.borrow_mut().try_start_produce() {
-                    successful = true;
-                    for (idx, output) in stream.borrow().recipe.borrow().outputs.iter().enumerate() {
-                        if produced[idx].product == output.product {
-                            produced[idx].amount += output.amount;
-                        } else {
-                            produced.iter_mut().find(|produced| produced.product == output.product).unwrap().amount += output.amount;
-                        }
-                    }
-
-                    for (knowledge, amount) in stream.borrow().recipe.borrow().knowledge.iter() {
-                        let knowledge = knowledge.borrow();
-                        println!("[-- Tick {} --] Learned {} x{} ({})", self.tick, knowledge.name, amount * mult, knowledge.progress);
-                    }
-                } else {
+                if !stream.borrow_mut().try_start_produce() {
+                    // can't produce another batch
+                    stream.borrow_mut().next = None;
                     break;
                 }
             }
-            
-
 
             for output in produced {
                 if output.amount > 0 {
                     println!("[-- Tick {} --] Produced {} x{}", self.tick, self.product_names.get(&*output.product.borrow()).unwrap(), output.amount * mult);
                 }
-            }
-
-            if cycles > 0 && !successful {
-                stream.borrow_mut().next = Some(old_next);
             }
         }
     }
